@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<!-- firebase deploy --only hosting -->
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RosettaCast Speaker</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #0f0f0f; color: #f0f0f0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 40px 20px; }
+    h1 { font-size: 1.8rem; font-weight: 300; letter-spacing: 0.1em; color: #aaa; margin-bottom: 32px; }
+    .controls { display: flex; flex-direction: column; align-items: center; gap: 16px; width: 100%; max-width: 700px; margin-bottom: 32px; }
+    .speaker-row { display: flex; gap: 10px; width: 100%; align-items: center; }
+    input[type="text"] { flex: 1; padding: 12px 16px; background: #1e1e1e; border: 1px solid #333; border-radius: 8px; color: #f0f0f0; font-size: 1rem; outline: none; transition: border-color 0.2s; }
+    input[type="text"]:focus { border-color: #555; }
+    input[type="text"]::placeholder { color: #555; }
+    input[type="text"]:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.connect-btn { padding: 12px 24px; background: #2a2a2a; border: 1px solid #444; border-radius: 8px; color: #f0f0f0; font-size: 0.95rem; cursor: pointer; transition: background 0.2s, border-color 0.2s; white-space: nowrap; }
+    button.connect-btn:hover { background: #333; border-color: #666; }
+    button.connect-btn.recording { border-color: #f44336; color: #f44336; }
+
+    /* Language buttons */
+
+    .transcript-box { width: 100%; max-width: 800px; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 32px; min-height: 200px; max-height: 40vh; overflow-y: auto; position: relative; scroll-behavior: smooth; }
+    .status-bar { font-size: 0.8rem; color: #555; margin-bottom: 20px; display: flex; justify-content: space-between; position: sticky; top: 0; background: #1a1a1a; padding-bottom: 8px; z-index: 1; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #555; margin-right: 6px; vertical-align: middle; }
+    .status-dot.live { background: #f44336; box-shadow: 0 0 6px #f44336; animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    #transcript-text { font-size: 1.4rem; line-height: 1.8; color: #e0e0e0; min-height: 100px; white-space: pre-wrap; }
+    .interim { color: #888; }
+    .placeholder-text { color: #444; font-style: italic; font-size: 1rem; }
+    .clear-btn { position: absolute; top: 16px; right: 16px; background: none; border: none; color: #444; cursor: pointer; font-size: 0.8rem; transition: color 0.2s; }
+    .clear-btn:hover { color: #888; }
+    .error-msg { color: #e57373; font-size: 0.85rem; margin-top: 8px; }
+    .vol-bar-wrap { width: 100%; max-width: 700px; height: 4px; background: #222; border-radius: 2px; overflow: hidden; }
+    .vol-bar { height: 100%; width: 0%; background: #f44336; transition: width 0.05s; border-radius: 2px; }
+
+    /* Debug window */
+    .debug-container { width: 100%; max-width: 800px; margin-top: 16px; }
+    .debug-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .debug-header span { font-size: 0.75rem; color: #555; }
+    .debug-header button { padding: 4px 10px; background: #1e1e1e; border: 1px solid #333; border-radius: 4px; color: #666; font-size: 0.75rem; cursor: pointer; }
+    .debug-header button:hover { color: #aaa; border-color: #555; }
+    #debugWindow { width: 100%; height: 260px; background: #0a0a0a; border: 1px solid #222; border-radius: 8px; padding: 10px; overflow-y: auto; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.7rem; color: #6a9955; white-space: pre-wrap; word-break: break-all; }
+    .debug-line { margin-bottom: 4px; border-bottom: 1px solid #111; padding-bottom: 4px; }
+    .debug-line.info { color: #888; }
+    .debug-line.error { color: #e57373; }
+    .debug-line.final { color: #a5d6a7; }
+    .debug-line.lang { color: #ffb74d; }
+    .debug-line.server { color: #4fc3f7; }
+  </style>
+</head>
+<body>
+  <h1>RosettaCast Speaker</h1>
+
+  <div class="controls">
+    <div class="speaker-row">
+      <input type="text" id="speakerInput" placeholder="Enter speaker code (e.g. ABC)" maxlength="20" />
+      <button class="connect-btn" id="connectBtn" onclick="toggleRecording()">Start Recording</button>
+    </div>
+
+    <!-- Language buttons — always visible, active button changes STT language -->
+
+
+    <div class="vol-bar-wrap"><div class="vol-bar" id="volBar"></div></div>
+    <div id="errorMsg" class="error-msg" style="display:none;"></div>
+  </div>
+
+  <div class="transcript-box" id="transcriptBox">
+    <div class="status-bar">
+      <span><span class="status-dot" id="statusDot"></span><span id="statusText">Not recording</span></span>
+      <span id="langLabel">detecting language...</span>
+    </div>
+    <button class="clear-btn" onclick="clearTranscript()">Clear</button>
+    <div id="transcript-text">
+      <span class="placeholder-text">Enter a speaker code and click Start Recording.</span>
+    </div>
+  </div>
+
+  <!-- Debug window -->
+  <div class="debug-container">
+    <div class="debug-header">
+      <span>🔍 Debug Log</span>
+      <button onclick="clearDebug()">Clear</button>
+    </div>
+    <div id="debugWindow"></div>
+  </div>
+
+  <!-- Firebase SDK for session start write -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, collection, addDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "YOUR_FIREBASE_API_KEY",
+      authDomain: "rosettacast.firebaseapp.com",
+      projectId: "rosettacast",
+      storageBucket: "rosettacast.firebasestorage.app",
+      messagingSenderId: "114230502988",
+      appId: "1:114230502988:web:46dcba200acfe59c7bf6e9",
+      measurementId: "G-VJH32MWZLF"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    window.writeSessionStart = async function(speaker) {
+      try {
+        const now = Date.now();
+        await addDoc(collection(db, "speech_transcripts"), {
+          speaker,
+          text: "A new transcript has started.",
+          language: "en-US",
+          timestamp: now,
+          expiresAt: new Date(now + 24 * 60 * 60 * 1000),
+        });
+        console.log("Session start written to Firestore");
+      } catch (err) {
+        console.error("Failed to write session start:", err);
+      }
+    };
+  </script>
+
+  <script src="/usage-tracker.js"></script>
+  <script>
+    const WS_URL ="wss://rosettacast-gemlivesmart-114230502988.us-central1.run.app";
+    const SAMPLE_RATE = 16000;
+
+    let ws = null;
+    let audioContext = null;
+    let mediaStream = null;
+    let processorNode = null;
+    let analyserNode = null;
+    let isRecording = false;
+    let finalText = "";
+    let volAnimFrame = null;
+    let currentSpeaker = "";
+    // No language picker any more: Gemini detects the language and reports it
+    // with every transcript. ?lang=ko-KR still forces one if detection misbehaves.
+    const LANG_OVERRIDE = new URLSearchParams(location.search).get("lang");
+    let currentLanguage = LANG_OVERRIDE || "auto";
+    let detectedLanguage = null;
+    let reconnectCount = 0;
+    const MAX_RECONNECTS = 30;
+    let sessionStartTime = 0;
+    let audioChunksSent = 0;
+    let finalCount = 0;
+    let keepaliveInterval = null;
+    let currentSessionId = null;
+    let rotateTimer = null;
+    let watchdogInterval = null;
+    // Logs each recording session to usage_sessions for the dashboard
+    const usage = window.UsageTracker ? new UsageTracker("speaker") : null;
+
+    // Cloud Run caps any single request -- and a WebSocket is one request -- at
+    // 60 minutes. Rather than wait to be cut off mid-sentence, replace the
+    // socket before that: open the next one, move audio onto it, then retire
+    // the old one. The session id is sent with the config so the server treats
+    // the whole talk as one session across rotations.
+    // ?rotate=<seconds> shortens the interval for testing.
+    const CONNECTION_ROTATE_MS = (() => {
+      const q = parseInt(new URLSearchParams(location.search).get("rotate"), 10);
+      return Number.isFinite(q) ? Math.min(Math.max(q, 10), 3600) * 1000 : 55 * 60 * 1000;
+    })();
+
+    // Used only to show what was detected, so it accepts bare codes too
+    const langLabels = {
+      "en-US": "English", "en": "English", "ko-KR": "Korean", "ko": "Korean",
+      "es-US": "Spanish", "es-ES": "Spanish", "es": "Spanish",
+      "fr-FR": "French", "fr": "French", "de-DE": "German", "de": "German",
+    };
+
+    // ── Debug window ─────────────────────────────────
+    const MAX_DEBUG_LINES = 200;
+    let debugLineCount = 0;
+
+    function debugLog(text, type = "info") {
+      const win = document.getElementById("debugWindow");
+      const elapsed = sessionStartTime ? ((Date.now() - sessionStartTime) / 1000).toFixed(1) : "0.0";
+      const line = document.createElement("div");
+      line.className = `debug-line ${type}`;
+      line.textContent = `[${elapsed}s] ${text}`;
+      win.appendChild(line);
+      debugLineCount++;
+      if (debugLineCount > MAX_DEBUG_LINES) win.removeChild(win.firstChild);
+      win.scrollTop = win.scrollHeight;
+    }
+
+    window.clearDebug = function() {
+      document.getElementById("debugWindow").innerHTML = "";
+      debugLineCount = 0;
+    };
+
+    function dbg(msg, type = "info") {
+      const elapsed = sessionStartTime ? ((Date.now() - sessionStartTime) / 1000).toFixed(1) : "0.0";
+      console.log(`[${elapsed}s] ${msg}`);
+      debugLog(msg, type);
+    }
+    // ─────────────────────────────────────────────────
+
+    // Language selection — works before and during recording
+    window.toggleRecording = function() {
+      if (isRecording) stopRecording(); else startRecording();
+    };
+
+    window.clearTranscript = function() {
+      finalText = "";
+      document.getElementById("transcript-text").textContent = "";
+    };
+
+    function setStatus(live, text) {
+      document.getElementById("statusDot").className = "status-dot" + (live ? " live" : "");
+      document.getElementById("statusText").textContent = text;
+    }
+
+    function showError(msg) {
+      const el = document.getElementById("errorMsg");
+      el.textContent = msg;
+      el.style.display = msg ? "block" : "none";
+    }
+
+    function updateTranscript(text, isFinal) {
+      const el = document.getElementById("transcript-text");
+      const box = document.getElementById("transcriptBox");
+      if (isFinal) {
+        finalText += text + " ";
+        el.textContent = finalText;
+      } else {
+        el.innerHTML = "";
+        el.appendChild(document.createTextNode(finalText));
+        const interimSpan = document.createElement("span");
+        interimSpan.className = "interim";
+        interimSpan.textContent = text;
+        el.appendChild(interimSpan);
+      }
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function startVolumeMonitor() {
+      const bar = document.getElementById("volBar");
+      function tick() {
+        if (!analyserNode) return;
+        const data = new Uint8Array(analyserNode.frequencyBinCount);
+        analyserNode.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+        bar.style.width = Math.min(Math.sqrt(sum / data.length) * 400, 100) + "%";
+        volAnimFrame = requestAnimationFrame(tick);
+      }
+      tick();
+    }
+
+    function stopVolumeMonitor() {
+      if (volAnimFrame) { cancelAnimationFrame(volAnimFrame); volAnimFrame = null; }
+      document.getElementById("volBar").style.width = "0%";
+    }
+
+    function floatToPCM16(float32Array) {
+      const int16 = new Int16Array(float32Array.length);
+      for (let i = 0; i < float32Array.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32Array[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return int16.buffer;
+    }
+
+    function scheduleRotate(delay = CONNECTION_ROTATE_MS) {
+      if (rotateTimer) clearTimeout(rotateTimer);
+      rotateTimer = setTimeout(() => { if (isRecording) openWebSocket(true); }, delay);
+    }
+
+    function openWebSocket(rotating = false) {
+      if (!isRecording) return;
+
+      dbg(`Opening WebSocket | ${rotating ? "rotation" : `reconnect #${reconnectCount}`} | lang=${currentLanguage}`);
+      const sock = new WebSocket(WS_URL);
+      sock.binaryType = "arraybuffer";
+      let opened = false;
+
+      sock.onopen = () => {
+        opened = true;
+        dbg("WebSocket opened");
+        if (reconnectCount > 0 && !rotating) dbg(`Reconnected (attempt #${reconnectCount})`);
+        const cfg = JSON.stringify({
+          type: "config", language: currentLanguage,
+          speaker: currentSpeaker, sessionId: currentSessionId,
+        });
+        sock.send(cfg);
+        dbg(`Config sent: ${cfg}`);
+
+        // Move audio onto the new socket, then retire the old one. Its late
+        // finals still arrive during the grace period.
+        const previous = ws;
+        ws = sock;
+        if (rotating && previous && previous !== sock) {
+          dbg("Rotated onto a fresh connection -- retiring the previous one");
+          setTimeout(() => { try { previous.close(1000, "rotated"); } catch {} }, 3000);
+        }
+
+        setStatus(true, "Recording...");
+        scheduleRotate();
+      };
+
+      sock.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          debugLog(`FROM SERVER: ${JSON.stringify(msg)}`, msg.error ? "error" : msg.isFinal ? "final" : "server");
+          if (msg.error) { dbg(`STT error: ${msg.error}`, "error"); showError("STT error: " + msg.error); return; }
+          if (msg.language && msg.language !== detectedLanguage && msg.language !== "auto") {
+            detectedLanguage = msg.language;
+            document.getElementById("langLabel").textContent = langLabels[msg.language] ?? msg.language;
+            dbg(`Language detected: ${msg.language}`, "lang");
+            usage?.setLanguage(msg.language);
+          }
+          if (msg.text) {
+            if (msg.isFinal) { finalCount++; dbg(`Final #${finalCount} | lang=${msg.language} | "${msg.text.slice(0, 50)}"`, "final"); }
+            updateTranscript(msg.text, msg.isFinal);
+          }
+        } catch(e) { dbg(`Failed to parse server message: ${e}`, "error"); }
+      };
+
+      sock.onclose = (event) => {
+        dbg(`WebSocket CLOSED | code=${event.code} | reason="${event.reason}" | chunks=${audioChunksSent} | finals=${finalCount}`);
+
+        // A retired socket closing is expected and must not touch recording state
+        if (sock !== ws) {
+          if (!opened && rotating && isRecording) {
+            dbg("Rotation attempt failed -- retrying in 30s", "error");
+            scheduleRotate(30000);
+          }
+          return;
+        }
+
+        // Any close while still recording is unexpected and must be recovered.
+        // stopRecording() clears isRecording before closing, and a rotated-out
+        // socket is filtered above, so reaching here while recording means the
+        // connection was lost -- including with code 1000, which previously
+        // fell through and silently ended the session for good.
+        if (isRecording) {
+          if (reconnectCount >= MAX_RECONNECTS) {
+            dbg("Max reconnects reached — stopping");
+            setStatus(false, "Max reconnects reached");
+            stopRecording();
+            return;
+          }
+          reconnectCount++;
+          const delay = Math.min(1000 * reconnectCount, 5000);
+          dbg(`Auto-reconnecting in ${delay}ms (attempt #${reconnectCount})...`);
+          setStatus(false, `Reconnecting (#${reconnectCount})...`);
+          setTimeout(openWebSocket, delay);
+          return;
+        }
+
+      };
+
+      sock.onerror = (err) => { debugLog(`WebSocket ERROR: ${JSON.stringify(err)}`, "error"); };
+    }
+
+    async function startRecording() {
+      const speaker = document.getElementById("speakerInput").value.trim();
+      if (!speaker) { showError("Please enter a speaker code."); return; }
+      showError("");
+
+      currentSpeaker = speaker;
+      currentSessionId = (crypto.randomUUID?.() ?? `s-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+      reconnectCount = 0;
+      sessionStartTime = Date.now();
+      audioChunksSent = 0;
+      finalCount = 0;
+
+      clearDebug();
+      detectedLanguage = null;
+      document.getElementById("langLabel").textContent =
+        LANG_OVERRIDE ? (langLabels[LANG_OVERRIDE] ?? LANG_OVERRIDE) + " (forced)" : "detecting language...";
+      dbg(`Session started | speaker=${speaker} | lang=${currentLanguage} | session=${currentSessionId}`);
+      dbg(`Connection rotates every ${Math.round(CONNECTION_ROTATE_MS / 1000)}s (Cloud Run caps a connection at 3600s)`);
+
+      if (window.writeSessionStart) await window.writeSessionStart(speaker);
+
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch (err) { showError("Microphone access denied: " + err.message); return; }
+
+      audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      analyserNode = audioContext.createAnalyser();
+      analyserNode.fftSize = 256;
+      source.connect(analyserNode);
+
+      processorNode = audioContext.createScriptProcessor(1024, 1, 1);
+      processorNode.onaudioprocess = (e) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(floatToPCM16(e.inputBuffer.getChannelData(0)));
+          audioChunksSent++;
+          if (audioChunksSent % 200 === 0) dbg(`Audio chunks: ${audioChunksSent}`);
+        }
+      };
+      source.connect(processorNode);
+      processorNode.connect(audioContext.destination);
+      startVolumeMonitor();
+
+      isRecording = true;
+      document.getElementById("connectBtn").textContent = "Stop Recording";
+      document.getElementById("connectBtn").classList.add("recording");
+      document.getElementById("speakerInput").disabled = true;
+      usage?.open(speaker, LANG_OVERRIDE ?? "");
+
+      // Belt and braces: a socket can die without ever firing onclose -- a
+      // phone sleeping mid-meeting is the usual way. If we are recording and
+      // nothing is open, reopen it.
+      watchdogInterval = setInterval(() => {
+        if (!isRecording) return;
+        const state = ws ? ws.readyState : WebSocket.CLOSED;
+        if (state === WebSocket.CLOSED || state === WebSocket.CLOSING) {
+          dbg("Watchdog: no live connection while recording -- reopening", "error");
+          openWebSocket();
+        }
+      }, 10000);
+
+      keepaliveInterval = setInterval(() => {
+        dbg(`Keepalive | chunks=${audioChunksSent} | finals=${finalCount} | wsState=${ws ? ws.readyState : "null"} | lang=${currentLanguage}`);
+      }, 30000);
+
+      openWebSocket();
+    }
+
+    function stopRecording() {
+      isRecording = false;
+      usage?.close("stopped");
+      dbg(`stopRecording | chunks=${audioChunksSent} | finals=${finalCount}`);
+      if (keepaliveInterval) { clearInterval(keepaliveInterval); keepaliveInterval = null; }
+      if (rotateTimer) { clearTimeout(rotateTimer); rotateTimer = null; }
+      if (watchdogInterval) { clearInterval(watchdogInterval); watchdogInterval = null; }
+      stopVolumeMonitor();
+      if (processorNode) { processorNode.disconnect(); processorNode = null; }
+      if (analyserNode) { analyserNode.disconnect(); analyserNode = null; }
+      if (audioContext) { audioContext.close(); audioContext = null; }
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+      if (ws && ws.readyState === WebSocket.OPEN) { ws.close(); }
+      ws = null;
+      document.getElementById("connectBtn").textContent = "Start Recording";
+      document.getElementById("connectBtn").classList.remove("recording");
+      document.getElementById("speakerInput").disabled = false;
+      setStatus(false, "Not recording");
+    }
+
+    // ── Prefill the speaker code from the URL ────────────
+    // speaker.html?speakercode=twinlakes fills the field, so a bookmark, a
+    // calendar link or a printed QR puts the right code in without anyone
+    // typing it. Recording is still started by hand: the microphone needs a
+    // real click, and nobody should be broadcast by opening a link.
+    (function prefillSpeakerCode() {
+      const params = new URLSearchParams(location.search);
+      const code = (params.get("speakercode") ?? params.get("speaker") ?? "").trim();
+      if (!code) return;
+      const input = document.getElementById("speakerInput");
+      const max = parseInt(input.getAttribute("maxlength") ?? "0", 10);
+      input.value = max > 0 ? code.slice(0, max) : code;
+      if (max > 0 && code.length > max) {
+        console.warn(`Speaker code from the URL was longer than ${max} characters and was trimmed`);
+      }
+      // The code is settled, so the button is what this page wants pressed next
+      document.getElementById("connectBtn").focus();
+    })();
+
+    document.addEventListener("visibilitychange", () => dbg(`Visibility: ${document.visibilityState}`));
+    window.addEventListener("offline", () => dbg("Network OFFLINE", "error"));
+    window.addEventListener("online", () => dbg("Network ONLINE"));
+    window.addEventListener("beforeunload", () => dbg("Page unloading"));
+  </script>
+</body>
+</html>

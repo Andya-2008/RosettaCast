@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<!-- firebase deploy --only hosting cd ..-->
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RosettaCast Live Translation</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f0f0f;
+      color: #f0f0f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      font-weight: 300;
+      letter-spacing: 0.1em;
+      color: #aaa;
+      margin-bottom: 32px;
+    }
+
+    .controls {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      width: 100%;
+      max-width: 600px;
+      margin-bottom: 32px;
+    }
+
+    .speaker-row {
+      display: flex;
+      gap: 10px;
+      width: 100%;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 12px 16px;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #f0f0f0;
+      font-size: 1rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input[type="text"]:focus {
+      border-color: #555;
+    }
+
+    input[type="text"]::placeholder {
+      color: #555;
+    }
+
+    button.connect-btn {
+      padding: 12px 24px;
+      background: #2a2a2a;
+      border: 1px solid #444;
+      border-radius: 8px;
+      color: #f0f0f0;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+      white-space: nowrap;
+    }
+
+    button.connect-btn:hover {
+      background: #333;
+      border-color: #666;
+    }
+
+    button.connect-btn.connected {
+      border-color: #4caf50;
+      color: #4caf50;
+    }
+
+    .lang-buttons {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .lang-btn {
+      padding: 10px 20px;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 24px;
+      color: #aaa;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .lang-btn:hover {
+      background: #2a2a2a;
+      border-color: #555;
+      color: #f0f0f0;
+    }
+
+    .lang-btn.active {
+      background: #1a3a1a;
+      border-color: #4caf50;
+      color: #4caf50;
+    }
+
+    .transcript-box {
+      width: 100%;
+      max-width: 800px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 32px;
+      min-height: 300px;
+      position: relative;
+    }
+
+    .status-bar {
+      font-size: 0.8rem;
+      color: #555;
+      margin-bottom: 20px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #555;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    .status-dot.live {
+      background: #4caf50;
+      box-shadow: 0 0 6px #4caf50;
+    }
+
+    #transcript-text {
+      font-size: 1.4rem;
+      line-height: 1.8;
+      color: #e0e0e0;
+      min-height: 200px;
+      white-space: pre-wrap;
+    }
+
+    .placeholder-text {
+      color: #444;
+      font-style: italic;
+      font-size: 1rem;
+    }
+
+    .clear-btn {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      background: none;
+      border: none;
+      color: #444;
+      cursor: pointer;
+      font-size: 0.8rem;
+      transition: color 0.2s;
+    }
+
+    .clear-btn:hover {
+      color: #888;
+    }
+
+    .error-msg {
+      color: #e57373;
+      font-size: 0.85rem;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>RosettaCast</h1>
+
+  <div class="controls">
+    <div class="speaker-row">
+      <input type="text" id="speakerInput" placeholder="Enter speaker code (e.g. ABC)" maxlength="10" />
+      <button class="connect-btn" id="connectBtn" onclick="toggleConnect()">Connect</button>
+    </div>
+    <div id="errorMsg" class="error-msg" style="display:none;"></div>
+
+    <div class="lang-buttons">
+      <button class="lang-btn active" data-lang="en" onclick="selectLanguage(this)">English</button>
+      <button class="lang-btn" data-lang="ko" onclick="selectLanguage(this)">Korean</button>
+      <button class="lang-btn" data-lang="es" onclick="selectLanguage(this)">Spanish</button>
+      <button class="lang-btn" data-lang="fr" onclick="selectLanguage(this)">French</button>
+      <button class="lang-btn" data-lang="de" onclick="selectLanguage(this)">German</button>
+    </div>
+  </div>
+
+  <div class="transcript-box">
+    <div class="status-bar">
+      <span><span class="status-dot" id="statusDot"></span><span id="statusText">Not connected</span></span>
+      <span id="langLabel">English</span>
+    </div>
+    <button class="clear-btn" onclick="clearTranscript()">Clear</button>
+    <div id="transcript-text">
+      <span class="placeholder-text">Enter a speaker code and click Connect to begin.</span>
+    </div>
+  </div>
+
+  <!-- Firebase SDK via CDN -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, collection, query, where, orderBy, onSnapshot, addDoc, serverTimestamp, setDoc, doc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    // -------------------------------------------------------
+    // YOUR FIREBASE CONFIG — replace with your project values
+    // -------------------------------------------------------
+
+
+	const firebaseConfig = {
+	  apiKey: "YOUR_FIREBASE_API_KEY",
+	  authDomain: "rosettacast.firebaseapp.com",
+	  projectId: "rosettacast",
+	  storageBucket: "rosettacast.firebasestorage.app",
+	  messagingSenderId: "114230502988",
+	  appId: "1:114230502988:web:46dcba200acfe59c7bf6e9",
+	  measurementId: "G-VJH32MWZLF"
+	};
+
+    // -------------------------------------------------------
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    let unsubscribe = null;
+    let selectedLanguage = "en";
+    let isConnected = false;
+    let listenStartMs = 0;
+
+    const langNames = { en: "English", ko: "Korean", es: "Spanish", fr: "French", de: "German" };
+
+    // Expose functions to global scope for onclick handlers
+    window.toggleConnect = function() {
+      if (isConnected) {
+        disconnect();
+      } else {
+        connect();
+      }
+    };
+
+    window.selectLanguage = function(btn) {
+      document.querySelectorAll(".lang-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      selectedLanguage = btn.dataset.lang;
+      document.getElementById("langLabel").textContent = langNames[selectedLanguage] ?? selectedLanguage;
+
+      // Write language request to Firestore if connected
+      if (isConnected) {
+        writeLanguageRequest();
+        // Restart listener to reflect new language immediately
+        startListener();
+      }
+    };
+
+    window.clearTranscript = function() {
+      document.getElementById("transcript-text").textContent = "";
+    };
+
+    function setStatus(live, text) {
+      document.getElementById("statusDot").className = "status-dot" + (live ? " live" : "");
+      document.getElementById("statusText").textContent = text;
+    }
+
+    function showError(msg) {
+      const el = document.getElementById("errorMsg");
+      el.textContent = msg;
+      el.style.display = msg ? "block" : "none";
+    }
+
+    function connect() {
+      const speaker = document.getElementById("speakerInput").value.trim();
+      if (!speaker) {
+        showError("Please enter a speaker code.");
+        return;
+      }
+      showError("");
+      isConnected = true;
+      listenStartMs = Date.now() - 30000; // include last 30 seconds
+
+      document.getElementById("connectBtn").textContent = "Disconnect";
+      document.getElementById("connectBtn").classList.add("connected");
+      document.getElementById("speakerInput").disabled = true;
+      document.getElementById("transcript-text").innerHTML = "";
+
+      writeLanguageRequest();
+      startListener();
+    }
+
+    function disconnect() {
+      isConnected = false;
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+      document.getElementById("connectBtn").textContent = "Connect";
+      document.getElementById("connectBtn").classList.remove("connected");
+      document.getElementById("speakerInput").disabled = false;
+      setStatus(false, "Disconnected");
+    }
+
+	function startListener() {
+	  if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+
+	  const speaker = document.getElementById("speakerInput").value.trim();
+	  
+	  console.log("Starting listener | speaker:", speaker, "| listenStartMs:", listenStartMs);
+
+	  const q = query(
+		collection(db, "speech_translations"),
+		where("speaker", "==", speaker),
+		where("timestamp", ">", listenStartMs),
+		orderBy("timestamp")
+	  );
+
+	  setStatus(true, "Listening...");
+
+	  unsubscribe = onSnapshot(q, (snapshot) => {
+		console.log("Snapshot received | size:", snapshot.size, "| changes:", snapshot.docChanges().length);
+		snapshot.docChanges().forEach((change) => {
+		  console.log("Change:", change.type, "| data:", JSON.stringify(change.doc.data()));
+		  if (change.type === "added" || change.type === "modified") {
+			const data = change.doc.data();
+			const translations = data.translations ?? {};
+			console.log("Translations:", JSON.stringify(translations), "| selectedLanguage:", selectedLanguage);
+			const text = translations[selectedLanguage] ?? translations[data.sourceLang] ?? "";
+			if (!text) return;
+
+			const el = document.getElementById("transcript-text");
+			el.textContent += text + " ";
+
+			if (el.textContent.length > 2000) {
+			  el.textContent = el.textContent.slice(el.textContent.length - 2000);
+			}
+		  }
+		});
+	  }, (err) => {
+		console.error("Firestore error:", err);
+		setStatus(false, "Error: " + err.message);
+	  });
+	}
+
+    async function writeLanguageRequest() {
+	  const speaker = document.getElementById("speakerInput").value.trim();
+	  if (!speaker) return;
+
+	  const now = Date.now();
+	  const expiresAt = new Date(now + 24 * 60 * 60 * 1000);
+
+	  // Use speaker_language as document ID — prevents duplicates entirely
+	  const docId = `${speaker}_${selectedLanguage}`;
+
+	  try {
+		await setDoc(doc(db, "language_requests", docId), {
+		  speaker,
+		  language: selectedLanguage,
+		  timestamp: now,
+		  expiresAt,
+		});
+		console.log(`Language request written: ${docId}`);
+	  } catch (err) {
+		console.error("Failed to write language request:", err);
+	  }
+	}
+  </script>
+</body>
+</html>

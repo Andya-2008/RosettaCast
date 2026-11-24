@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /speech_translations/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /speech_sentences/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /language_requests/{doc} {
+      allow read, write: if true;
+    }
+
+    match /speech_transcripts/{doc} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /fragment_batches/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /session_buffers/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Written only by the usage function; read by dashboard.html, which has no
+    // sign-in yet. Rows hold no personal data and only a hash of each
+    // browser's cookie.
+    match /usage_sessions/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

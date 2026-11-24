@@ -1,0 +1,199 @@
+import WebSocket, { WebSocketServer } from "ws";
+import speech from "@google-cloud/speech";
+import { Firestore } from "@google-cloud/firestore";
+import crypto from "crypto";
+
+/* ======================================================
+   Setup
+   Deploy:
+   gcloud run deploy rosettacast --source . --region us-central1 --allow-unauthenticated
+   firebase deploy --only functions
+====================================================== */
+
+const speechClient = new speech.SpeechClient();
+const db = new Firestore({ projectId: 'rosettacast' });
+
+const PORT = process.env.PORT || 8080;
+const wss = new WebSocketServer({ port: PORT });
+
+const INTERIM_FLUSH_WORD_THRESHOLD = 15;
+const MAX_RECONNECTS = 30;
+const STT_RESTART_MS = 4.5 * 60 * 1000;
+
+console.log(`RosettaCast (Google STT) listening on port ${PORT}`);
+
+/* ======================================================
+   Helper: word count
+====================================================== */
+function wordCount(text) {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/* ======================================================
+   Helper: Firestore write
+====================================================== */
+async function storeFinalTranscript({ sessionId, speaker, text, language }) {
+  const now = Date.now();
+  return db.collection("speech_transcripts").add({
+    sessionId,
+    speaker,
+    text,
+    language,
+    timestamp: now,
+    expiresAt: new Date(now + 24 * 60 * 60 * 1000),
+  }).then(() => {
+    console.log(`Firestore write OK | "${text.slice(0, 40)}"`);
+  });
+}
+
+/* ======================================================
+   WebSocket Connection
+====================================================== */
+wss.on("connection", (ws) => {
+  console.log("Client connected");
+
+  const sessionId = crypto.randomUUID();
+  let recognizeStream = null;
+  let initialized = false;
+  let sessionLanguage = null;
+  let sessionSpeaker = "unknown";
+  let lastFlushedWordCount = 0;
+  let sttRestartCount = 0;
+  let sttRestartTimeout = null;
+
+  const MAX_SESSION_MS = 130 * 60 * 1000;
+  const sessionTimeout = setTimeout(() => {
+    console.log(`Session timeout | session=${sessionId}`);
+    try { recognizeStream?.end(); } catch {}
+    try { ws.close(); } catch {}
+  }, MAX_SESSION_MS);
+
+  function createRecognizeStream() {
+    const stream = speechClient
+      .streamingRecognize({
+        config: {
+          encoding: "LINEAR16",
+          sampleRateHertz: 16000,
+          languageCode: sessionLanguage,
+          enableAutomaticPunctuation: false,
+          model: "latest_long",
+        },
+        interimResults: true,
+      })
+      .on("data", (data) => {
+        const result = data.results?.[0];
+        const alt = result?.alternatives?.[0];
+        if (!alt?.transcript) return;
+
+        const transcript = alt.transcript;
+        const detectedLanguage = alt.languageCode || sessionLanguage;
+
+        if (result.isFinal) {
+          const words = transcript.trim().split(/\s+/);
+          const newChunk = words.slice(lastFlushedWordCount).join(" ");
+          lastFlushedWordCount = 0;
+
+          console.log(`Final | lang=${detectedLanguage} | "${newChunk.slice(0, 60)}"`);
+          try { ws.send(JSON.stringify({ text: newChunk, isFinal: true, language: detectedLanguage, speaker: sessionSpeaker })); } catch {}
+
+          storeFinalTranscript({
+            sessionId,
+            speaker: sessionSpeaker,
+            text: newChunk,
+            language: detectedLanguage,
+          }).catch((err) => console.error("Firestore write failed:", err.message));
+
+        } else {
+          const totalWords = wordCount(transcript);
+          const newWordsSinceFlush = totalWords - lastFlushedWordCount;
+
+          if (newWordsSinceFlush >= INTERIM_FLUSH_WORD_THRESHOLD) {
+            const words = transcript.trim().split(/\s+/);
+            const newChunk = words.slice(lastFlushedWordCount).join(" ");
+            lastFlushedWordCount = totalWords;
+
+            console.log(`Interim flush | words=${totalWords} | "${newChunk.slice(0, 60)}"`);
+            try { ws.send(JSON.stringify({ text: newChunk, isFinal: true, language: detectedLanguage, speaker: sessionSpeaker })); } catch {}
+
+            storeFinalTranscript({
+              sessionId,
+              speaker: sessionSpeaker,
+              text: newChunk,
+              language: detectedLanguage,
+            }).catch((err) => console.error("Firestore write failed (interim):", err.message));
+
+          } else {
+            try { ws.send(JSON.stringify({ text: transcript, isFinal: false, language: detectedLanguage, speaker: sessionSpeaker })); } catch {}
+          }
+        }
+      })
+      .on("error", (err) => {
+        console.error(`Google STT error | session=${sessionId} | ${err.message}`);
+        clearTimeout(sttRestartTimeout);
+        sttRestartTimeout = setTimeout(restartSTT, 100);
+      });
+
+    return stream;
+  }
+
+  function restartSTT() {
+    if (ws.readyState !== WebSocket.OPEN) return;
+
+    if (sttRestartCount >= MAX_RECONNECTS) {
+      console.log(`Max STT restarts reached | session=${sessionId}`);
+      try { ws.close(); } catch {}
+      return;
+    }
+
+    sttRestartCount++;
+    console.log(`Restarting STT stream #${sttRestartCount} | session=${sessionId}`);
+    try { recognizeStream?.end(); } catch {}
+    lastFlushedWordCount = 0;
+    recognizeStream = createRecognizeStream();
+    sttRestartTimeout = setTimeout(restartSTT, STT_RESTART_MS);
+  }
+
+  ws.on("message", (msg) => {
+    if (!initialized) {
+      let cfg;
+      try { cfg = JSON.parse(msg.toString()); } catch {
+        console.error("Invalid JSON config");
+        ws.close();
+        return;
+      }
+
+      if (cfg.type !== "config" || !cfg.language) {
+        console.error("Missing config or language");
+        ws.close();
+        return;
+      }
+
+      sessionLanguage = cfg.language;
+      sessionSpeaker = typeof cfg.speaker === "string" && cfg.speaker.length > 0
+        ? cfg.speaker : "unknown";
+
+      console.log(`Starting STT | session=${sessionId} | language=${sessionLanguage} | speaker=${sessionSpeaker}`);
+
+      recognizeStream = createRecognizeStream();
+      sttRestartTimeout = setTimeout(restartSTT, STT_RESTART_MS);
+      initialized = true;
+      return;
+    }
+
+    if (recognizeStream) {
+      try { recognizeStream.write(msg); } catch {}
+    }
+  });
+
+  ws.on("close", () => {
+    clearTimeout(sessionTimeout);
+    clearTimeout(sttRestartTimeout);
+    console.log(`Client disconnected | session=${sessionId} | STT restarts: ${sttRestartCount}`);
+    try { recognizeStream?.end(); } catch {}
+  });
+
+  ws.on("error", (err) => {
+    console.error("WebSocket error:", err.message);
+    try { recognizeStream?.end(); } catch {}
+  });
+});

@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<!-- firebase deploy --only hosting -->
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RosettaCast Live Translation</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #0f0f0f; color: #f0f0f0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 12px 18px; }
+    .controls { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%; max-width: 100%; margin-bottom: 10px; }
+    .speaker-row { display: flex; gap: 8px; width: 100%; align-items: center; justify-content: center; }
+    select#speakerSelect { width: 200px; padding: 10px 14px; background: #1e1e1e; border: 1px solid #333; border-radius: 8px; color: #f0f0f0; font-size: 1rem; outline: none; cursor: pointer; transition: border-color 0.2s; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; padding-right: 36px; }
+    select#speakerSelect:focus { border-color: #555; }
+    select#speakerSelect option { background: #1e1e1e; color: #f0f0f0; }
+    .lang-buttons { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    .lang-btn { padding: 10px 20px; background: #1e1e1e; border: 1px solid #333; border-radius: 24px; color: #aaa; font-size: 0.9rem; cursor: pointer; transition: all 0.2s; }
+    .lang-btn:hover { background: #2a2a2a; border-color: #555; color: #f0f0f0; }
+    .lang-btn.active { background: #1a3a1a; border-color: #4caf50; color: #4caf50; }
+    .font-btn { padding: 8px 16px; background: #2a2a2a; border: 1px solid #444; border-radius: 8px; color: #f0f0f0; font-size: 0.9rem; cursor: pointer; transition: background 0.2s; }
+    .font-btn:hover { background: #333; border-color: #666; }
+    .error-msg { color: #e57373; font-size: 0.85rem; margin-top: 4px; }
+
+    /* Side panel: the QR is for people in the room, not for the phone
+       already holding the page, so it is hidden on small screens. */
+    .stage { display: flex; gap: 14px; width: 100%; flex: 1; min-height: 0; }
+    .qr-panel {
+      width: 440px; flex: none; background: #1a1a1a; border: 1px solid #2a2a2a;
+      border-radius: 8px; padding: 18px 16px; display: flex; flex-direction: column;
+      align-items: center; gap: 12px; align-self: flex-start;
+    }
+    .qr-panel h2 { font-size: 2.55rem; font-weight: 600; color: #aaa; letter-spacing: 0.04em; text-align: center; }
+    .qr-code { background: #fff; padding: 10px; border-radius: 6px; line-height: 0; }
+    .qr-code svg { display: block; width: 200px; height: 200px; }
+    .qr-note { font-size: 2.34rem; line-height: 1.5; color: #888; text-align: center; }
+    .qr-url { font-size: 0.68rem; color: #555; word-break: break-all; text-align: center; }
+    .qr-panel.waiting .qr-code { display: none; }
+    @media (max-width: 1100px) { .qr-panel { display: none; } }
+
+    /* Two pane layout */
+    .panes { display: flex; flex-direction: column; gap: 8px; width: 100%; flex: 1; min-height: 0; }
+
+    /* Committed text pane — takes most of the space */
+    .committed-box {
+      width: 100%;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 16px 20px;
+      overflow-y: auto;
+      flex: 3;
+      min-height: 0;
+      position: relative;
+    }
+
+    /* In-progress pane — smaller, at bottom */
+    .interim-box {
+      width: 100%;
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 12px 20px;
+      flex: 1;
+      min-height: 140px;
+      max-height: 320px;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .pane-label {
+      font-size: 0.7rem;
+      color: #444;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    .status-bar { font-size: 0.8rem; color: #555; margin-bottom: 12px; display: flex; justify-content: space-between; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #555; margin-right: 6px; vertical-align: middle; }
+    .status-dot.live { background: #4caf50; box-shadow: 0 0 6px #4caf50; }
+
+    #committed-text { font-size: 3.36rem; line-height: 1.8; color: #e0e0e0; white-space: pre-wrap; }
+    #interim-text { font-size: 2.88rem; line-height: 1.6; color: #666; white-space: pre-wrap; font-style: italic; }
+
+    .sentence-committed { font-weight: bold; color: #e0e0e0; }
+    .sentence-last { font-weight: bold; color: #90caf9; }
+
+    .placeholder-text { color: #333; font-style: italic; font-size: 1.6rem; }
+    .clear-btn { position: absolute; top: 10px; right: 12px; background: none; border: none; color: #333; cursor: pointer; font-size: 0.75rem; transition: color 0.2s; }
+    .clear-btn:hover { color: #888; }
+
+    #ttsBtn.tts-on { border-color: #4caf50; color: #4caf50; }
+    @keyframes pulse-border {
+      0%, 100% { box-shadow: 0 0 0 2px #4caf50, 0 0 8px 3px rgba(76,175,80,0.6); border-color: #4caf50; }
+      50% { box-shadow: 0 0 0 2px rgba(76,175,80,0.2), 0 0 4px 1px rgba(76,175,80,0.1); border-color: #555; }
+    }
+    select#speakerSelect.needs-selection { animation: pulse-border 1.2s ease-in-out infinite; }
+
+    /* A phone is read at arm's length, so the large sizes above are for the
+       screen at the front of the room, not for the device in someone's hand.
+       The QR panel is hidden separately at 1100px, where the 440px panel stops
+       fitting beside the transcript. */
+    @media (max-width: 900px) {
+      #committed-text { font-size: 1.4rem; }
+      #interim-text { font-size: 1.2rem; }
+      .placeholder-text { font-size: 1rem; }
+      .interim-box { min-height: 80px; max-height: 160px; }
+    }
+
+    /* Make body fill screen */
+    html, body { height: 100%; }
+    body { display: flex; flex-direction: column; }
+  </style>
+</head>
+<body>
+  <div class="controls">
+    <div class="speaker-row">
+      <select id="speakerSelect" class="needs-selection"><option value="">Choose a Speaker</option></select>
+      <button class="font-btn" onclick="changeFontSize(-2)">A-</button>
+      <button class="font-btn" onclick="changeFontSize(2)">A+</button>
+      <button class="font-btn" id="ttsBtn" onclick="toggleTTS()" title="Read aloud">🔇 Audio Off</button>
+    </div>
+    <div id="errorMsg" class="error-msg" style="display:none;"></div>
+    <div class="lang-buttons">
+      <button class="lang-btn active" data-lang="en" onclick="selectLanguage(this)">English</button>
+      <button class="lang-btn" data-lang="ko" onclick="selectLanguage(this)">Korean</button>
+      <button class="lang-btn" data-lang="es" onclick="selectLanguage(this)">Spanish</button>
+      <button class="lang-btn" data-lang="fr" onclick="selectLanguage(this)">French</button>
+      <button class="lang-btn" data-lang="de" onclick="selectLanguage(this)">German</button>
+    </div>
+  </div>
+
+  <div class="stage">
+  <div class="panes">
+    <!-- Top pane: finalized sentences -->
+    <div class="committed-box" id="committedBox">
+      <div class="status-bar">
+        <span><span class="status-dot" id="statusDot"></span><span id="statusText">Loading...</span></span>
+        <span id="langLabel">English</span>
+      </div>
+      <button class="clear-btn" onclick="clearTranscript()">Clear</button>
+      <div id="committed-text">
+        <span class="placeholder-text">Choose a speaker above to begin.</span>
+      </div>
+    </div>
+
+    <!-- Bottom pane: in-progress text -->
+    <div class="interim-box" id="interimBox">
+      <button class="clear-btn" onclick="clearInterim()">Clear</button>
+      <div id="interim-text">
+        <span class="placeholder-text">In-progress text will appear here...</span>
+      </div>
+    </div>
+  </div>
+
+  <aside class="qr-panel waiting" id="qrPanel">
+    <h2>Listen on your phone</h2>
+    <div class="qr-code" id="qrCode"></div>
+    <p class="qr-note">To listen on your mobile device, scan in this code,
+      select your language, and listen on your bluetooth headphones.</p>
+    <p class="qr-url" id="qrUrl">Choose a speaker to show the code</p>
+  </aside>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+  <script>
+    // ── Shareable link + QR ──────────────────────────────
+    // The QR points at this same page with ?speakercode= already filled in, so
+    // scanning it lands on the right feed without anyone typing a code.
+    window.listenUrl = function(speaker) {
+      const url = new URL(location.origin + location.pathname);
+      if (speaker) url.searchParams.set("speakercode", speaker);
+      return url.toString();
+    };
+
+    window.renderQr = function(speaker) {
+      const panel = document.getElementById("qrPanel");
+      const holder = document.getElementById("qrCode");
+      const label = document.getElementById("qrUrl");
+      if (!speaker) {
+        panel.classList.add("waiting");
+        holder.innerHTML = "";
+        label.textContent = "Choose a speaker to show the code";
+        return;
+      }
+      const url = window.listenUrl(speaker);
+      label.textContent = url;
+      try {
+        // typeNumber 0 lets the library size the code to the data
+        const qr = qrcode(0, "M");
+        qr.addData(url);
+        qr.make();
+        holder.innerHTML = qr.createSvgTag({ cellSize: 6, margin: 1, scalable: true });
+        panel.classList.remove("waiting");
+      } catch (err) {
+        console.error("QR generation failed:", err);
+        panel.classList.add("waiting");
+        label.textContent = url;
+      }
+    };
+
+    // ── Text-to-Speech with queue ────────────────────────
+    let ttsEnabled = false;
+    let ttsQueue = [];
+    let ttsBusy = false;
+
+    window.toggleTTS = function() {
+      ttsEnabled = !ttsEnabled;
+      const btn = document.getElementById("ttsBtn");
+      if (ttsEnabled) {
+        btn.textContent = "🔊 Audio On";
+        btn.classList.add("tts-on");
+      } else {
+        btn.textContent = "🔇 Audio Off";
+        btn.classList.remove("tts-on");
+        window.speechSynthesis.cancel();
+        ttsQueue = [];
+        ttsBusy = false;
+      }
+    };
+
+    function processQueue() {
+      if (ttsBusy || ttsQueue.length === 0) return;
+      const { text, lang } = ttsQueue.shift();
+      ttsBusy = true;
+
+      const langMap = { en: "en-US", ko: "ko-KR", es: "es-ES", fr: "fr-FR", de: "de-DE" };
+      const utterance = new SpeechSynthesisUtterance(text.trim());
+      utterance.lang = langMap[lang] ?? lang ?? "en-US";
+      utterance.rate = 0.95;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+
+      utterance.onend = () => {
+        ttsBusy = false;
+        processQueue(); // play next in queue
+      };
+      utterance.onerror = () => {
+        ttsBusy = false;
+        processQueue(); // skip and play next on error
+      };
+
+      window.speechSynthesis.speak(utterance);
+    }
+
+    function speakText(text, lang) {
+      if (!ttsEnabled || !text || !text.trim()) return;
+      ttsQueue.push({ text, lang });
+      processQueue();
+    }
+
+    window._speakText = speakText;
+    // ─────────────────────────────────────────────────────
+  </script>
+
+  <script src="/usage-tracker.js"></script>
+  <script type="module">
+    console.log("Script starting...");
+
+    let app, db;
+    try {
+      const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+      const { getFirestore, collection, query, where, orderBy, onSnapshot, setDoc, doc, getDocs } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+      console.log("Firebase SDK loaded OK");
+
+      const firebaseConfig = {
+        apiKey: "YOUR_FIREBASE_API_KEY",
+        authDomain: "rosettacast.firebaseapp.com",
+        projectId: "rosettacast",
+        storageBucket: "rosettacast.firebasestorage.app",
+        messagingSenderId: "114230502988",
+        appId: "1:114230502988:web:46dcba200acfe59c7bf6e9",
+        measurementId: "G-VJH32MWZLF"
+      };
+
+      app = initializeApp(firebaseConfig);
+      db = getFirestore(app);
+      console.log("Firebase initialized OK");
+
+      let unsubscribe = null;
+      const SMALL_SCREEN = window.matchMedia("(max-width: 900px)");
+      let currentFontSize = SMALL_SCREEN.matches ? 1.4 : 3.36;
+      let selectedLanguage = "en";
+      let isConnected = false;
+      let listenStartMs = 0;
+      const langNames = { en: "English", ko: "Korean", es: "Spanish", fr: "French", de: "German" };
+      // Logs each connection to usage_sessions for the dashboard
+      const usage = window.UsageTracker ? new UsageTracker("listener") : null;
+
+      // Committed docs: docId -> { text }
+      const committedDocs = new Map();
+      // In-progress doc: the latest doc not yet finalized
+      let interimDocId = null;
+      let interimText = "";
+
+      // How long a sentence sits in the in-progress pane with no further updates
+      // before it is treated as settled and moved up. Any update to the sentence
+      // restarts the clock, so this only fires once the speaker actually stops.
+      const INTERIM_SETTLE_MS = 3000;
+      let interimTimer = null;
+
+      function cancelInterimTimer() {
+        if (interimTimer) { clearTimeout(interimTimer); interimTimer = null; }
+      }
+
+      function scheduleInterimCommit() {
+        cancelInterimTimer();
+        if (!interimDocId || !interimText) return;
+        interimTimer = setTimeout(commitInterim, INTERIM_SETTLE_MS);
+      }
+
+      // Promote the in-progress sentence to the transcript and speak it. Called
+      // both when the next sentence arrives and when the settle timer expires,
+      // so the last sentence of a talk is never left stranded below.
+      function commitInterim() {
+        cancelInterimTimer();
+        if (!interimDocId || !interimText) return;
+        const settledText = interimText;
+        committedDocs.set(interimDocId, { text: settledText });
+        interimDocId = null;
+        interimText = "";
+        renderCommitted();
+        renderInterim();
+        if (window._speakText) window._speakText(settledText, selectedLanguage);
+      }
+
+      // ── Reading-pace scrolling ───────────────────────────
+      // A long passage arriving at once used to jump the transcript straight to
+      // its end, so listeners lost the start of what had just been said. New
+      // text now scrolls into view at roughly the pace it can be read. Pace is
+      // set in lines rather than pixels, so it holds at any font size.
+      //
+      // Scrolling back to re-read stops the following; returning to the bottom
+      // resumes it. Otherwise the animation would drag a reader forward.
+      const SECONDS_PER_LINE = 2.0;  // reading pace
+      const MAX_LAG_SECONDS = 90;    // past this backlog, speed up to stay within it
+
+      // Animation frames stop whenever the browser decides the page is not
+      // being painted -- an occluded window, a background tab, a dimmed phone.
+      // A frame-only animation would then freeze the transcript entirely, which
+      // is worse than the jump it replaced, so a timer covers for missing frames.
+      function nextTick(fn) {
+        let done = false, r = 0, t = 0;
+        const run = () => {
+          if (done) return;
+          done = true;
+          cancelAnimationFrame(r);
+          clearTimeout(t);
+          fn(performance.now());
+        };
+        r = requestAnimationFrame(run);
+        t = setTimeout(run, 50);
+        return () => { done = true; cancelAnimationFrame(r); clearTimeout(t); };
+      }
+
+      function makeReader(box, textEl) {
+        let following = true;
+        let cancelTick = null, last = 0, pos = 0;
+        const lineHeight = () => parseFloat(getComputedStyle(textEl).lineHeight) || 40;
+        const gapToEnd = () => box.scrollHeight - box.clientHeight - box.scrollTop;
+
+        // Signs of a person scrolling, as opposed to this code scrolling
+        const userScrolled = () => { following = false; };
+        box.addEventListener("wheel", userScrolled, { passive: true });
+        box.addEventListener("touchmove", userScrolled, { passive: true });
+        box.addEventListener("mousedown", (e) => { if (e.target === box) userScrolled(); });
+        box.addEventListener("scroll", () => {
+          if (!following && gapToEnd() < lineHeight() / 2) { following = true; follow(); }
+        });
+
+        function frame(now) {
+          // a throttled background timer can be a second late; cap the step so
+          // a long stall resumes as a scroll rather than a leap
+          const dt = last ? Math.min(1, (now - last) / 1000) : 0;
+          last = now;
+          const gap = gapToEnd();
+          if (!following || gap <= 1) { cancelTick = null; last = 0; return; }
+          const pace = lineHeight() / SECONDS_PER_LINE;
+          const speed = Math.max(pace, gap / MAX_LAG_SECONDS);
+          // accumulate as a float: a fraction of a pixel per frame is lost if
+          // written straight to scrollTop, which rounds
+          pos = Math.min(pos + speed * dt, box.scrollHeight - box.clientHeight);
+          box.scrollTop = pos;
+          cancelTick = nextTick(frame);
+        }
+
+        function follow() {
+          // Scroll events are delivered with rendering, so on a page that is not
+          // being painted a reader who returned to the end is never re-pinned by
+          // the listener above. Checking again whenever new text arrives covers it.
+          if (!following && gapToEnd() < lineHeight() / 2) following = true;
+          if (!following || cancelTick) return;
+          pos = box.scrollTop;
+          last = 0;
+          cancelTick = nextTick(frame);
+        }
+
+        // History, a language switch or a cleared screen is not new speech --
+        // land at the end immediately rather than reading through it.
+        function jumpToEnd() {
+          following = true;
+          if (cancelTick) { cancelTick(); cancelTick = null; }
+          box.scrollTop = box.scrollHeight;
+          pos = box.scrollTop;
+        }
+
+        return { follow, jumpToEnd, isFollowing: () => following };
+      }
+
+      const committedReader = makeReader(
+        document.getElementById("committedBox"), document.getElementById("committed-text"));
+      window.committedReader = committedReader;   // inspectable from the console
+
+      window.changeFontSize = function(delta) {
+        currentFontSize = Math.min(12, Math.max(0.6, currentFontSize + delta * 0.2));
+        document.getElementById("committed-text").style.fontSize = currentFontSize + "rem";
+        document.getElementById("interim-text").style.fontSize = (currentFontSize * 0.85) + "rem";
+      };
+
+      function renderCommitted({ jump = false } = {}) {
+        const el = document.getElementById("committed-text");
+        el.innerHTML = "";
+        const entries = [...committedDocs.entries()];
+        entries.forEach(([, entry], i) => {
+          const span = document.createElement("span");
+          span.textContent = entry.text + " ";
+          span.className = i === entries.length - 1 ? "sentence-last" : "sentence-committed";
+          el.appendChild(span);
+        });
+        if (jump) committedReader.jumpToEnd();
+        else committedReader.follow();
+      }
+
+      // A new sentence arrives here whole, already translated, so it is shown
+      // from its first line. (Scrolling this pane to the bottom, as it used to,
+      // showed only the end of a long passage.)
+      let interimShownFor = null;
+      function renderInterim() {
+        const el = document.getElementById("interim-text");
+        el.textContent = interimText;
+        if (interimDocId !== interimShownFor) {
+          document.getElementById("interimBox").scrollTop = 0;
+          interimShownFor = interimDocId;
+        }
+      }
+
+      window.clearTranscript = function() {
+        cancelInterimTimer();
+        committedDocs.clear();
+        interimDocId = null;
+        interimText = "";
+        document.getElementById("committed-text").innerHTML = "";
+        document.getElementById("interim-text").textContent = "";
+        committedReader.jumpToEnd();
+      };
+
+      window.clearInterim = function() {
+        cancelInterimTimer();
+        interimText = "";
+        renderInterim();
+      };
+
+      async function loadSpeakerCodes() {
+        const select = document.getElementById("speakerSelect");
+        console.log("Loading speaker codes...");
+        try {
+          const snap = await getDocs(collection(db, "speech_transcripts"));
+          console.log("speech_transcripts docs:", snap.size);
+          const speakers = new Set();
+          snap.forEach((d) => { const s = d.data().speaker; if (s) speakers.add(s); });
+          console.log("Speakers found:", [...speakers]);
+          select.innerHTML = '<option value="">Choose a Speaker</option>';
+          [...speakers].sort().forEach((speaker) => {
+            const opt = document.createElement("option");
+            opt.value = speaker;
+            opt.textContent = speaker;
+            select.appendChild(opt);
+          });
+          setStatus(false, "Choose a speaker");
+          applySpeakerFromUrl(select);
+        } catch (err) {
+          console.error("Failed to load speaker codes:", err);
+          setStatus(false, "Error: " + err.message);
+          applySpeakerFromUrl(select);
+        }
+      }
+
+      // ?speakercode=XYZ selects that speaker and connects, so a scanned QR
+      // lands straight on the feed. The code is added to the list if it is not
+      // there yet -- someone can scan before the speaker has started, and the
+      // dropdown is built from transcripts that do not exist until they do.
+      function applySpeakerFromUrl(select) {
+        const wanted = (new URLSearchParams(location.search).get("speakercode") ?? "").trim();
+        if (!wanted) return;
+        const match = [...select.options].find(
+          (o) => o.value.toLowerCase() === wanted.toLowerCase());
+        if (match) {
+          select.value = match.value;
+        } else {
+          const opt = document.createElement("option");
+          opt.value = wanted;
+          opt.textContent = wanted;
+          select.appendChild(opt);
+          select.value = wanted;
+          console.log(`Speaker "${wanted}" not listed yet -- added from the URL`);
+        }
+        select.dispatchEvent(new Event("change"));
+      }
+
+      loadSpeakerCodes();
+
+      document.getElementById("speakerSelect").addEventListener("change", function() {
+        const speaker = this.value.trim();
+        if (speaker) this.classList.remove("needs-selection");
+        else this.classList.add("needs-selection");
+        if (isConnected) disconnect();
+        if (speaker) connect();
+
+        // The QR and the address bar always show the feed being watched, so the
+        // link can be copied or scanned at any moment without going stale.
+        if (window.renderQr) window.renderQr(speaker);
+        try {
+          history.replaceState(null, "", speaker ? window.listenUrl(speaker) : location.pathname);
+        } catch {}
+      });
+
+      window.selectLanguage = function(btn) {
+        document.querySelectorAll(".lang-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        selectedLanguage = btn.dataset.lang;
+        document.getElementById("langLabel").textContent = langNames[selectedLanguage] ?? selectedLanguage;
+        if (isConnected) { writeLanguageRequest(); switchLanguage(); usage?.setLanguage(selectedLanguage); }
+      };
+
+      function setStatus(live, text) {
+        document.getElementById("statusDot").className = "status-dot" + (live ? " live" : "");
+        document.getElementById("statusText").textContent = text;
+      }
+
+      function showError(msg) {
+        const el = document.getElementById("errorMsg");
+        el.textContent = msg;
+        el.style.display = msg ? "block" : "none";
+      }
+
+      function getSpeaker() { return document.getElementById("speakerSelect").value.trim(); }
+
+      function connect() {
+        const speaker = getSpeaker();
+        if (!speaker) return;
+        showError("");
+        isConnected = true;
+        cancelInterimTimer();
+        listenStartMs = Date.now() - (30 * 60 * 1000); // 30 min lookback for clock skew
+        committedDocs.clear();
+        interimDocId = null;
+        interimText = "";
+        document.getElementById("committed-text").innerHTML = "";
+        document.getElementById("interim-text").textContent = "";
+        writeLanguageRequest();
+        switchLanguage();
+        usage?.open(speaker, selectedLanguage);
+      }
+
+      function disconnect() {
+        isConnected = false;
+        usage?.close("disconnected");
+        cancelInterimTimer();
+        if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+        committedDocs.clear();
+        interimDocId = null;
+        interimText = "";
+        setStatus(false, "Disconnected");
+      }
+
+      function switchLanguage() {
+        if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+
+        const speaker = getSpeaker();
+        console.log("Starting listener | speaker:", speaker, "| lang:", selectedLanguage);
+
+        const q = query(
+          collection(db, "speech_translations"),
+          where("speaker", "==", speaker),
+          where("timestamp", ">", listenStartMs),
+          orderBy("timestamp")
+        );
+
+        setStatus(true, "Listening...");
+        let firstSnapshot = true;
+
+        unsubscribe = onSnapshot(q, (snapshot) => {
+          console.log("Snapshot | docs:", snapshot.size, "| first:", firstSnapshot);
+
+          if (firstSnapshot) {
+            firstSnapshot = false;
+            cancelInterimTimer();
+            committedDocs.clear();
+            interimDocId = null;
+            interimText = "";
+
+            // All existing docs go into committed instantly
+            snapshot.docs.forEach((docSnap) => {
+              const data = docSnap.data();
+              const translations = data.translations ?? {};
+              const text = translations[selectedLanguage] ?? translations[data.sourceLang] ?? "";
+              if (!text) return;
+              committedDocs.set(docSnap.id, { text });
+            });
+
+            renderCommitted({ jump: true });
+            renderInterim();
+            return;
+          }
+
+          // Subsequent changes
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === "added" || change.type === "modified") {
+              const data = change.doc.data();
+              const docId = change.doc.id;
+              const translations = data.translations ?? {};
+              const text = translations[selectedLanguage] ?? translations[data.sourceLang] ?? "";
+              if (!text) return;
+
+              if (change.type === "added") {
+                // New doc — goes to interim (in-progress bottom pane).
+                // Whatever was in progress is settled now, so promote and speak it.
+                commitInterim();
+                interimDocId = docId;
+                interimText = text;
+                renderCommitted();
+                renderInterim();
+                scheduleInterimCommit();
+              } else if (change.type === "modified") {
+                if (docId === interimDocId) {
+                  // Update in-progress pane — the sentence is still moving,
+                  // so restart the settle clock
+                  interimText = text;
+                  renderInterim();
+                  scheduleInterimCommit();
+                } else {
+                  // Already committed — update in place
+                  committedDocs.set(docId, { text });
+                  renderCommitted();
+                }
+              }
+            }
+          });
+        }, (err) => {
+          console.error("Firestore error:", err);
+          setStatus(false, "Error: " + err.message);
+          showError("Firestore error: " + err.message);
+        });
+      }
+
+      async function writeLanguageRequest() {
+        const speaker = getSpeaker();
+        if (!speaker) return;
+        const now = Date.now();
+        const docId = `${speaker}_${selectedLanguage}`;
+        try {
+          await setDoc(doc(db, "language_requests", docId), {
+            speaker, language: selectedLanguage,
+            timestamp: now,
+            expiresAt: new Date(now + 24 * 60 * 60 * 1000),
+          });
+        } catch (err) { console.error("Failed to write language request:", err); }
+      }
+
+    } catch (err) {
+      console.error("Fatal initialization error:", err);
+      document.getElementById("statusText").textContent = "Failed to load: " + err.message;
+      document.getElementById("committed-text").innerHTML = `<span style="color:#e57373">Error: ${err.message}</span>`;
+    }
+  </script>
+</body>
+</html>

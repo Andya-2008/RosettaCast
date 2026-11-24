@@ -1,0 +1,98 @@
+// firestore/functions/onSentenceCreated.js
+import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { TranslationServiceClient } from "@google-cloud/translate";
+import { getFirestore } from "firebase-admin/firestore";
+
+const translationClient = new TranslationServiceClient();
+const PROJECT_ID = process.env.GCLOUD_PROJECT;
+
+async function getRequestedLanguages(db, speaker, sourceLang) {
+  const snap = await db.collection("language_requests")
+    .where("speaker", "==", speaker)
+    .get();
+
+  const languages = new Set();
+
+  // English is always included by default
+  languages.add("en");
+
+  const now = Date.now();
+
+  for (const doc of snap.docs) {
+    const data = doc.data();
+    const expiresAt = data.expiresAt?.toMillis?.() ?? 0;
+    if (expiresAt < now) continue;
+    if (data.language) {
+      languages.add(data.language);
+    }
+  }
+
+  // Remove the source language — no need to translate into the language being spoken
+  languages.delete(sourceLang);
+
+  return [...languages];
+}
+
+export const onSentenceCreated = onDocumentCreated(
+  "speech_sentences/{docId}",
+  async (event) => {
+    const db = getFirestore();
+    const sentence = event.data?.data();
+    if (!sentence) return;
+
+    const sentenceId = event.params.docId;
+    const { sessionId, speaker, text, sourceLang, timestamp } = sentence;
+
+    const targetLanguages = await getRequestedLanguages(db, speaker, sourceLang);
+
+    if (targetLanguages.length === 0) {
+      console.log(`No target languages for speaker=${speaker}, storing source only`);
+      const now = Date.now();
+      await db.collection("speech_translations").add({
+        sessionId,
+        sentenceId,
+        speaker,
+        sourceLang,
+        translations: { [sourceLang]: text },
+        timestamp,
+        processedAt: now,
+        expiresAt: new Date(now + 24 * 60 * 60 * 1000),
+      });
+      return;
+    }
+
+    const results = await Promise.all(
+      targetLanguages
+        .filter((targetLang) => targetLang !== sourceLang)
+        .map(async (targetLang) => {
+          const [response] = await translationClient.translateText({
+            parent: `projects/${PROJECT_ID}/locations/global`,
+            contents: [text],
+            mimeType: "text/plain",
+            sourceLanguageCode: sourceLang,
+            targetLanguageCode: targetLang,
+          });
+          return { targetLang, translatedText: response.translations[0].translatedText };
+        })
+    );
+
+    const translations = { [sourceLang]: text };
+    for (const { targetLang, translatedText } of results) {
+      translations[targetLang] = translatedText;
+    }
+
+    const now = Date.now();
+    await db.collection("speech_translations").add({
+      sessionId,
+      sentenceId,
+      speaker,
+      sourceLang,
+      translations,
+      timestamp,
+      processedAt: now,
+      expiresAt: new Date(now + 24 * 60 * 60 * 1000),
+    });
+
+    console.log(`Translated | session=${sessionId} | ${sourceLang} -> [${targetLanguages.join(", ")}]`);
+  }
+);

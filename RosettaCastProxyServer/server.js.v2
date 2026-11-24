@@ -1,0 +1,186 @@
+import WebSocket, { WebSocketServer } from "ws";
+import speech from "@google-cloud/speech";
+import { Firestore } from "@google-cloud/firestore";
+import crypto from "crypto";
+
+/* ======================================================
+   Setup
+   Deploy:
+   gcloud run deploy rosettacast --source . --region us-central1 --allow-unauthenticated
+   firebase deploy --only functions
+====================================================== */
+//const PROJECT_ID = process.env.GCLOUD_PROJECT || "rosettacast";
+//const PROJECT_ID = "rosettacast";
+
+const speechClient = new speech.v2.SpeechClient();
+const PROJECT_ID = await speechClient.getProjectId();
+
+const db = new Firestore();
+
+const PORT = process.env.PORT || 8080;
+const wss = new WebSocketServer({ port: PORT });
+
+console.log(`✅ Rosetta Cast listening on port ${PORT}`);
+
+/* ======================================================
+   Helper: Firestore write (FINAL transcripts only)
+====================================================== */
+
+async function storeFinalTranscript({
+  sessionId,
+  speaker,
+  text,
+  language,
+}) {
+  const now = Date.now();
+
+  return db.collection("speech_transcripts").add({
+    sessionId,
+    speaker,
+    text,
+    language,
+    timestamp: now,
+    expiresAt: new Date(now + 24 * 60 * 60 * 1000),
+  });
+}
+
+/* ======================================================
+   WebSocket Connection
+====================================================== */
+
+wss.on("connection", (ws) => {
+  console.log("🔌 Client connected");
+
+  const sessionId = crypto.randomUUID();
+
+  let recognizeStream = null;
+  let initialized = false;
+
+  // ✅ Session-scoped metadata
+  let sessionLanguage = null;
+  let sessionSpeaker = "unknown";
+
+  ws.on("message", (msg) => {
+    /* --------------------------------------------------
+       1️⃣ First message: config JSON
+    -------------------------------------------------- */
+    if (!initialized) {
+      let cfg;
+
+      try {
+        cfg = JSON.parse(msg.toString());
+      } catch {
+        console.error("❌ Invalid JSON config:" + msg.toString());
+        ws.close();
+        return;
+      }
+
+      if (cfg.type !== "config" || !cfg.language) {
+        console.error("❌ Missing config or language");
+        ws.close();
+        return;
+      }
+
+      // ✅ Capture session metadata
+      sessionLanguage = cfg.language;
+      sessionSpeaker =
+        typeof cfg.speaker === "string" && cfg.speaker.length > 0
+          ? cfg.speaker
+          : "unknown";
+
+      console.log(
+        `🎙️ Starting STT v2 | session=${sessionId} | language=${sessionLanguage} | speaker=${sessionSpeaker}`
+      );
+
+      /* --------------------------------------------------
+         2️⃣ Start Google STT v2 streamingRecognize
+      -------------------------------------------------- */
+      recognizeStream = speechClient.streamingRecognize();
+		
+      recognizeStream.on("data", (data) => {
+          const result = data.results?.[0];
+          const alt = result?.alternatives?.[0];
+          if (!alt?.transcript) return;
+
+          if (result.isFinal) {
+            const detectedLanguage = result.languageCode || sessionLanguage;
+            console.log(`📝 Final | lang=${detectedLanguage} | "${alt.transcript}"`);
+
+            const payload = {
+              text: alt.transcript,
+              isFinal: true,
+              language: detectedLanguage,
+              speaker: sessionSpeaker,
+            };
+            try {
+              ws.send(JSON.stringify(payload));
+            } catch {}
+
+            storeFinalTranscript({
+              sessionId,
+              speaker: sessionSpeaker,
+              text: alt.transcript,
+              language: detectedLanguage,
+            }).catch((err) =>
+              console.error("⚠️ Firestore write failed:", err.message)
+            );
+          }
+        })
+        .on("error", (err) => {
+          console.error("❌ Google STT error:", err);
+          try {
+            ws.send(JSON.stringify({ error: err.message }));
+          } catch {}
+          try {
+            ws.close();
+          } catch {}
+        });
+
+      // ✅ Send the streaming config as the first write
+      recognizeStream.write({
+		//recognizer: `projects/114230502988/locations/global/recognizers/_`,
+		recognizer: `projects/${PROJECT_ID}/locations/global/recognizers/_`,
+        streamingConfig: {
+          config: {
+            explicitDecodingConfig: {
+              encoding: "LINEAR16",
+              sampleRateHertz: 16000,
+              audioChannelCount: 1,
+            },
+            languageCodes: ["en-US", "ko-KR", "es-US", "fr-FR", "de-DE"],
+            model: "latest_short",
+            features: {
+              enableAutomaticPunctuation: false,
+            },
+          },
+          interimResults: true,
+          
+        },
+      });
+
+      initialized = true;
+      return;
+    }
+
+    /* --------------------------------------------------
+       3️⃣ After init: audio only (raw PCM)
+    -------------------------------------------------- */
+    if (recognizeStream && !recognizeStream.destroyed) {
+	  recognizeStream.write({ audio: msg });
+	}
+  });
+
+  ws.on("close", () => {
+    console.log(`🔒 Client disconnected | session=${sessionId}`);
+    try {
+      recognizeStream?.end();
+    } catch {}
+  });
+
+  ws.on("error", (err) => {
+    console.error("❌ WebSocket error:", err);
+    try {
+      recognizeStream?.end();
+    } catch {}
+  });
+});

@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<!-- firebase deploy --only hosting -->
+<!-- Usage dashboard: live connections and history from usage_sessions, which
+     the usage function (RosettaCastProxyServer/firestore/functions/usage.js)
+     writes. No sign-in yet; the table holds no personal data. -->
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RosettaCast Usage</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f9f9f7; --surface: #fcfcfb;
+      --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+      --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+      --series-1: #2a78d6; --good: #0ca30c; --hover: rgba(11,11,11,0.04);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --page: #0d0d0d; --surface: #1a1a19;
+        --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+        --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+        --series-1: #3987e5; --good: #0ca30c; --hover: rgba(255,255,255,0.05);
+      }
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19;
+      --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5; --good: #0ca30c; --hover: rgba(255,255,255,0.05);
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--ink);
+           font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.45; }
+    main { max-width: 1200px; margin: 0 auto; padding: 28px 16px 64px; }
+    h1 { font-size: 1.6rem; margin: 0 0 4px; font-weight: 650; }
+    h2 { font-size: 1.15rem; margin: 0; font-weight: 650; }
+    h3 { font-size: 0.95rem; margin: 0 0 10px; font-weight: 600; }
+    .sub { color: var(--ink-2); margin: 0 0 28px; }
+    section { margin-bottom: 40px; }
+    .section-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+    .meta { color: var(--muted); font-size: 0.85rem; }
+
+    .live-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--ink-2);
+                 border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; background: var(--surface); }
+    .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+    .live-pill.off .live-dot { background: var(--muted); }
+
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .tile .label { color: var(--ink-2); font-size: 0.85rem; }
+    .tile .value { font-size: 1.8rem; font-weight: 600; margin-top: 2px; }
+    .tile .note { color: var(--muted); font-size: 0.78rem; }
+
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 16px; }
+
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; font-weight: 600; color: var(--ink-2); padding: 6px 10px; border-bottom: 1px solid var(--axis); white-space: nowrap; }
+    td { padding: 6px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    tbody tr:hover { background: var(--hover); }
+    .empty { color: var(--muted); padding: 12px 0; }
+    .tag { display: inline-block; font-size: 0.75rem; border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; color: var(--ink-2); }
+
+    .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: end; margin-bottom: 16px; }
+    .filters label { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: var(--ink-2); }
+    select, input[type="date"], button {
+      font: inherit; font-size: 0.9rem; color: var(--ink); background: var(--surface);
+      border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; min-height: 34px;
+    }
+    button { cursor: pointer; }
+    button:hover { background: var(--hover); }
+    .hidden { display: none !important; }
+
+    /* Horizontal bar list: label | bar | value */
+    .bars { display: grid; grid-template-columns: minmax(70px, max-content) 1fr max-content; gap: 6px 10px; align-items: center; }
+    .bars .name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bars .track { height: 14px; }
+    .bars .fill { height: 14px; max-height: 14px; background: var(--series-1); border-radius: 0 4px 4px 0; min-width: 2px; }
+    .bars .val { color: var(--ink-2); font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+
+    #dailyChart { position: relative; }
+    #dailyChart svg { display: block; width: 100%; }
+    .tooltip { position: absolute; pointer-events: none; background: var(--surface); color: var(--ink);
+               border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 0.8rem;
+               box-shadow: 0 2px 8px rgba(0,0,0,0.12); white-space: nowrap; z-index: 2; }
+    .tooltip .t-val { font-weight: 600; }
+    details summary { cursor: pointer; color: var(--ink-2); font-size: 0.85rem; margin-top: 10px; }
+    #status { color: var(--ink-2); }
+    .error { color: #d03b3b; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>RosettaCast usage</h1>
+  <p class="sub">Times are in your local time. Days are counted in Pacific time.</p>
+
+  <!-- ── Live ─────────────────────────────────────────── -->
+  <section id="live">
+    <div class="section-head">
+      <h2>Live now</h2>
+      <span class="live-pill off" id="livePill"><span class="live-dot"></span><span id="liveState">Connecting…</span></span>
+    </div>
+    <div class="tiles">
+      <div class="card tile"><div class="label">Listeners</div><div class="value" id="liveListeners">–</div></div>
+      <div class="card tile"><div class="label">Speakers</div><div class="value" id="liveSpeakers">–</div></div>
+      <div class="card tile"><div class="label">Active feeds</div><div class="value" id="liveFeeds">–</div></div>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <h3>Feeds</h3>
+      <div class="table-wrap" id="liveFeedTable"></div>
+    </div>
+    <div class="card">
+      <h3>Connections</h3>
+      <div class="table-wrap" id="liveConnTable"></div>
+      <p class="meta" style="margin:10px 0 0">A connection counts as live until it closes, or for 11 minutes after its last heartbeat (sent every 5 minutes).</p>
+    </div>
+  </section>
+
+  <!-- ── History ──────────────────────────────────────── -->
+  <section id="history">
+    <div class="section-head"><h2>History</h2><span class="meta" id="status"></span></div>
+    <div class="filters">
+      <label>Period
+        <select id="range">
+          <option value="7">Last 7 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="365">Last 12 months</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </label>
+      <label class="hidden" id="fromWrap">From <input type="date" id="from"></label>
+      <label class="hidden" id="toWrap">To <input type="date" id="to"></label>
+      <label>Speaker code
+        <select id="codeFilter"><option value="">All codes</option></select>
+      </label>
+      <button id="refresh" type="button">Refresh</button>
+      <button id="csv" type="button">Download CSV</button>
+    </div>
+
+    <div class="tiles">
+      <div class="card tile"><div class="label">Unique listeners</div><div class="value" id="hUnique">–</div><div class="note">distinct browsers</div></div>
+      <div class="card tile"><div class="label">Listener connections</div><div class="value" id="hConns">–</div></div>
+      <div class="card tile"><div class="label">Listener hours</div><div class="value" id="hHours">–</div></div>
+      <div class="card tile"><div class="label">Avg. minutes per connection</div><div class="value" id="hAvg">–</div></div>
+      <div class="card tile"><div class="label">Peak simultaneous listeners</div><div class="value" id="hPeak">–</div><div class="note" id="hPeakWhen"></div></div>
+      <div class="card tile"><div class="label">Speaker sessions</div><div class="value" id="hSpk">–</div><div class="note" id="hSpkHours"></div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <h3 id="chartTitle">Unique listeners per day</h3>
+      <div id="dailyChart"></div>
+      <details><summary>Table view</summary><div class="table-wrap" id="dailyTable"></div></details>
+    </div>
+
+    <div class="grid-3">
+      <div class="card"><h3>Languages</h3><div id="byLang"></div><p class="meta" style="margin:10px 0 0">Listener connections that used each language.</p></div>
+      <div class="card"><h3>Devices</h3><div id="byDevice"></div><p class="meta" style="margin:10px 0 0">Unique listeners.</p></div>
+      <div class="card"><h3>Browsers</h3><div id="byBrowser"></div><p class="meta" style="margin:10px 0 0">Unique listeners.</p></div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <h3>By speaker code</h3>
+      <div class="table-wrap" id="byCode"></div>
+    </div>
+
+    <div class="card">
+      <h3>Sessions</h3>
+      <div class="table-wrap" id="sessions"></div>
+      <p class="meta" id="sessionsNote" style="margin:10px 0 0"></p>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+  const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+  const { getFirestore, collection, query, where, orderBy, onSnapshot, getDocs, Timestamp } =
+    await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+
+  const app = initializeApp({
+    apiKey: "YOUR_FIREBASE_API_KEY",
+    authDomain: "rosettacast.firebaseapp.com",
+    projectId: "rosettacast",
+    storageBucket: "rosettacast.firebasestorage.app",
+    messagingSenderId: "114230502988",
+    appId: "1:114230502988:web:46dcba200acfe59c7bf6e9",
+  });
+  const db = getFirestore(app);
+  const rowsRef = collection(db, "usage_sessions");
+
+  const LIVE_WINDOW_MS = 11 * 60 * 1000;   // heartbeat every 5 min, so one may be missed
+  const TZ = "America/Los_Angeles";
+  const LANG = { en: "English", ko: "Korean", es: "Spanish", fr: "French", de: "German" };
+  const SHOWN_SESSIONS = 200;
+
+  // ── Helpers ─────────────────────────────────────────
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const ms = (ts) => (ts?.toMillis ? ts.toMillis() : null);
+  const fmtInt = (n) => n.toLocaleString();
+  const fmtNum = (n, d = 1) => n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+  const langName = (l) => LANG[l] ?? (l || "—");
+  const fmtTime = (t) => (t ? new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
+  const fmtClock = (t) => new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const ago = (t) => {
+    const m = Math.round((Date.now() - t) / 60000);
+    return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.floor(m / 60)} h ${m % 60} min ago`;
+  };
+
+  const dayFmt = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" });
+  const hourFmt = new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", hourCycle: "h23" });
+  const wdFmt = new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "short" });
+  const dayKey = (t) => dayFmt.format(t);   // YYYY-MM-DD in Pacific time
+  // Milliseconds at 00:00 Pacific on that day (PST is UTC-8, PDT UTC-7)
+  function pacificStart(key) {
+    const [y, m, d] = key.split("-").map(Number);
+    for (const h of [8, 7]) {
+      const t = Date.UTC(y, m - 1, d, h);
+      if (dayKey(t) === key && Number(hourFmt.format(t)) === 0) return t;
+    }
+    return Date.UTC(y, m - 1, d, 8);
+  }
+  function daysBetween(fromKey, toKey) {
+    const out = [];
+    // Step from noon so a DST change never skips or repeats a day
+    for (let t = pacificStart(fromKey) + 12 * 3600e3; dayKey(t) <= toKey; t += 86400e3) out.push(dayKey(t));
+    return out;
+  }
+  const shortDay = (key) => new Date(pacificStart(key) + 12 * 3600e3)
+    .toLocaleDateString(undefined, { timeZone: TZ, month: "short", day: "numeric" });
+
+  // A row's end: its goodbye, else its last heartbeat once it has gone quiet,
+  // else now (still live)
+  function endOf(r, now) {
+    if (r.disconnectedAt) return r.disconnectedAt;
+    return now - r.lastSeenAt > LIVE_WINDOW_MS ? r.lastSeenAt : now;
+  }
+  const isLive = (r, now) => !r.disconnectedAt && now - r.lastSeenAt <= LIVE_WINDOW_MS;
+
+  function toRow(d) {
+    const x = d.data();
+    return {
+      id: d.id, role: x.role ?? "listener", speakerCode: x.speakerCode ?? "", clientUid: x.clientUid ?? "",
+      language: x.language ?? "", languages: x.languages ?? [], device: x.device ?? "Other", browser: x.browser ?? "Other",
+      connectedAt: ms(x.connectedAt), lastSeenAt: ms(x.lastSeenAt) ?? ms(x.connectedAt),
+      disconnectedAt: ms(x.disconnectedAt), endReason: x.endReason ?? "",
+    };
+  }
+
+  function countBy(items, keyFn) {
+    const m = new Map();
+    for (const it of items) for (const k of [].concat(keyFn(it))) m.set(k, (m.get(k) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }
+
+  function peakOf(rows, now) {
+    const ev = [];
+    for (const r of rows) { ev.push([r.connectedAt, 1]); ev.push([endOf(r, now), -1]); }
+    ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);   // a close before an open at the same instant
+    let cur = 0, best = 0, at = null;
+    for (const [t, d] of ev) { cur += d; if (cur > best) { best = cur; at = t; } }
+    return { best, at };
+  }
+
+  function barList(el, entries, nameFn = (k) => k) {
+    if (!entries.length) { el.innerHTML = '<div class="empty">No data</div>'; return; }
+    const max = entries[0][1], total = entries.reduce((s, e) => s + e[1], 0);
+    el.innerHTML = `<div class="bars">${entries.map(([k, v]) => `
+      <div class="name" title="${esc(nameFn(k))}">${esc(nameFn(k))}</div>
+      <div class="track"><div class="fill" style="width:${(v / max) * 100}%"></div></div>
+      <div class="val">${fmtInt(v)} · ${Math.round((v / total) * 100)}%</div>`).join("")}</div>`;
+  }
+
+  function table(el, head, rows, emptyText) {
+    if (!rows.length) { el.innerHTML = `<div class="empty">${esc(emptyText)}</div>`; return; }
+    el.innerHTML = `<table><thead><tr>${head.map(([h, cls]) => `<th class="${cls ?? ""}">${esc(h)}</th>`).join("")}</tr></thead>
+      <tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td class="${head[i][1] ?? ""}">${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  }
+
+  // ── Live ────────────────────────────────────────────
+  // Subscribe to rows heard from in the last 30 minutes and decide liveness
+  // locally; the window moves, so resubscribe every 10 minutes and re-render
+  // every 30 seconds.
+  let liveRows = [];
+  let liveUnsub = null;
+  function subscribeLive() {
+    liveUnsub?.();
+    const q = query(rowsRef, where("lastSeenAt", ">=", Timestamp.fromMillis(Date.now() - 30 * 60 * 1000)));
+    liveUnsub = onSnapshot(q, (snap) => {
+      liveRows = snap.docs.map(toRow);
+      $("livePill").classList.remove("off");
+      renderLive();
+    }, (err) => {
+      $("livePill").classList.add("off");
+      $("liveState").textContent = "Error: " + err.message;
+    });
+  }
+
+  function renderLive() {
+    const now = Date.now();
+    const live = liveRows.filter((r) => isLive(r, now));
+    const listeners = live.filter((r) => r.role === "listener");
+    const speakers = live.filter((r) => r.role === "speaker");
+    const codes = [...new Set(live.map((r) => r.speakerCode))].sort();
+
+    $("liveListeners").textContent = fmtInt(listeners.length);
+    $("liveSpeakers").textContent = fmtInt(speakers.length);
+    $("liveFeeds").textContent = fmtInt(codes.length);
+    $("liveState").textContent = `Live · updated ${fmtClock(now)}`;
+
+    table($("liveFeedTable"),
+      [["Speaker code"], ["Speaker"], ["Listeners", "num"], ["Languages"], ["Devices"]],
+      codes.map((code) => {
+        const ls = listeners.filter((r) => r.speakerCode === code);
+        const spk = speakers.some((r) => r.speakerCode === code);
+        return [
+          esc(code),
+          spk ? '<span class="tag">Recording</span>' : '<span class="meta">—</span>',
+          fmtInt(ls.length),
+          esc(countBy(ls, (r) => langName(r.language)).map(([k, v]) => `${k} ${v}`).join(", ") || "—"),
+          esc(countBy(ls, (r) => r.device).map(([k, v]) => `${k} ${v}`).join(", ") || "—"),
+        ];
+      }),
+      "Nobody is connected right now.");
+
+    table($("liveConnTable"),
+      [["Role"], ["Speaker code"], ["Language"], ["Device"], ["Browser"], ["Connected"], ["Last heard"]],
+      live.sort((a, b) => a.connectedAt - b.connectedAt).map((r) => [
+        esc(r.role), esc(r.speakerCode),
+        esc(r.languages.length > 1 ? r.languages.map(langName).join(" → ") : langName(r.language)),
+        esc(r.device), esc(r.browser), esc(fmtTime(r.connectedAt)), esc(ago(r.lastSeenAt)),
+      ]),
+      "Nobody is connected right now.");
+  }
+
+  subscribeLive();
+  setInterval(subscribeLive, 10 * 60 * 1000);
+  setInterval(renderLive, 30 * 1000);
+
+  // ── History ─────────────────────────────────────────
+  let histRows = [];
+  let period = null;
+
+  function currentPeriod() {
+    const v = $("range").value;
+    const today = dayKey(Date.now());
+    if (v === "custom") {
+      const from = $("from").value || today, to = $("to").value || today;
+      return from <= to ? { from, to } : { from: to, to: from };
+    }
+    return { from: dayKey(Date.now() - (Number(v) - 1) * 86400e3), to: today };
+  }
+
+  async function loadHistory() {
+    period = currentPeriod();
+    const start = pacificStart(period.from);
+    // An hour past the last day covers a 25-hour DST day; the extra is filtered out below
+    const end = pacificStart(period.to) + 25 * 3600e3;
+    $("status").textContent = "Loading…";
+    try {
+      const snap = await getDocs(query(rowsRef,
+        where("connectedAt", ">=", Timestamp.fromMillis(start)),
+        where("connectedAt", "<", Timestamp.fromMillis(end)),
+        orderBy("connectedAt", "desc")));
+      histRows = snap.docs.map(toRow).filter((r) => r.connectedAt && dayKey(r.connectedAt) <= period.to);
+
+      // Keep the chosen code if it is still in the list
+      const sel = $("codeFilter"), keep = sel.value;
+      const codes = [...new Set(histRows.map((r) => r.speakerCode))].sort((a, b) => a.localeCompare(b));
+      sel.innerHTML = '<option value="">All codes</option>' + codes.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+      sel.value = codes.includes(keep) ? keep : "";
+
+      $("status").textContent = `${fmtInt(histRows.length)} sessions · loaded ${fmtClock(Date.now())}`;
+      $("status").classList.remove("error");
+      renderHistory();
+    } catch (err) {
+      $("status").textContent = "Error: " + err.message;
+      $("status").classList.add("error");
+    }
+  }
+
+  function filtered() {
+    const code = $("codeFilter").value;
+    return code ? histRows.filter((r) => r.speakerCode === code) : histRows;
+  }
+
+  function renderHistory() {
+    const now = Date.now();
+    const rows = filtered();
+    const listeners = rows.filter((r) => r.role === "listener");
+    const speakers = rows.filter((r) => r.role === "speaker");
+    const minutes = (r) => Math.max(0, endOf(r, now) - r.connectedAt) / 60000;
+
+    const lMin = listeners.reduce((s, r) => s + minutes(r), 0);
+    const sMin = speakers.reduce((s, r) => s + minutes(r), 0);
+    const peak = peakOf(listeners, now);
+    $("hUnique").textContent = fmtInt(new Set(listeners.map((r) => r.clientUid)).size);
+    $("hConns").textContent = fmtInt(listeners.length);
+    $("hHours").textContent = fmtNum(lMin / 60);
+    $("hAvg").textContent = listeners.length ? fmtNum(lMin / listeners.length) : "–";
+    $("hPeak").textContent = fmtInt(peak.best);
+    $("hPeakWhen").textContent = peak.at ? fmtTime(peak.at) : "";
+    $("hSpk").textContent = fmtInt(speakers.length);
+    $("hSpkHours").textContent = speakers.length ? `${fmtNum(sMin / 60)} hours recorded` : "";
+
+    renderDaily(listeners);
+
+    barList($("byLang"), countBy(listeners, (r) => (r.languages.length ? r.languages : [r.language])), langName);
+    const uniqueBy = (fn) => countBy([...new Map(listeners.map((r) => [r.clientUid, r])).values()], fn);
+    barList($("byDevice"), uniqueBy((r) => r.device));
+    barList($("byBrowser"), uniqueBy((r) => r.browser));
+
+    const codes = [...new Set(rows.map((r) => r.speakerCode))];
+    const codeRows = codes.map((code) => {
+      const ls = listeners.filter((r) => r.speakerCode === code);
+      const ss = speakers.filter((r) => r.speakerCode === code);
+      return {
+        code, ss: ss.length, sh: ss.reduce((s, r) => s + minutes(r), 0) / 60,
+        ul: new Set(ls.map((r) => r.clientUid)).size, lc: ls.length,
+        lh: ls.reduce((s, r) => s + minutes(r), 0) / 60, pk: peakOf(ls, now).best,
+      };
+    }).sort((a, b) => b.lh - a.lh || b.ss - a.ss);
+    table($("byCode"),
+      [["Speaker code"], ["Speaker sessions", "num"], ["Speaker hours", "num"], ["Unique listeners", "num"],
+       ["Listener connections", "num"], ["Listener hours", "num"], ["Peak listeners", "num"]],
+      codeRows.map((c) => [esc(c.code), fmtInt(c.ss), fmtNum(c.sh), fmtInt(c.ul), fmtInt(c.lc), fmtNum(c.lh), fmtInt(c.pk)]),
+      "No sessions in this period.");
+
+    table($("sessions"),
+      [["Connected"], ["Role"], ["Speaker code"], ["Languages"], ["Device"], ["Browser"], ["Minutes", "num"], ["Ended"], ["Client"]],
+      rows.slice(0, SHOWN_SESSIONS).map((r) => [
+        esc(fmtTime(r.connectedAt)), esc(r.role), esc(r.speakerCode),
+        esc((r.languages.length ? r.languages : [r.language]).map(langName).join(", ")),
+        esc(r.device), esc(r.browser), fmtNum(minutes(r), 0),
+        isLive(r, now) ? '<span class="tag">Live</span>' : esc(r.endReason || "timed out"),
+        `<span class="meta">${esc(r.clientUid.slice(0, 8))}</span>`,
+      ]),
+      "No sessions in this period.");
+    $("sessionsNote").textContent = rows.length > SHOWN_SESSIONS
+      ? `Showing the latest ${SHOWN_SESSIONS} of ${fmtInt(rows.length)}. Download the CSV for all of them.` : "";
+  }
+
+  // Unique listeners per day; per week (starting Sunday) past three months
+  function renderDaily(listeners) {
+    const days = daysBetween(period.from, period.to);
+    const weekly = days.length > 92;
+    const bucketOf = (key) => {
+      if (!weekly) return key;
+      const t = pacificStart(key) + 12 * 3600e3;
+      const back = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(wdFmt.format(t));
+      return dayKey(t - back * 86400e3);
+    };
+    const buckets = [...new Set(days.map(bucketOf))];
+    const sets = new Map(buckets.map((b) => [b, new Set()]));
+    for (const r of listeners) sets.get(bucketOf(dayKey(r.connectedAt)))?.add(r.clientUid);
+    const data = buckets.map((b) => ({ key: b, value: sets.get(b).size }));
+
+    $("chartTitle").textContent = weekly ? "Unique listeners per week" : "Unique listeners per day";
+    table($("dailyTable"), [[weekly ? "Week of" : "Day"], ["Unique listeners", "num"]],
+      data.slice().reverse().map((d) => [esc(shortDay(d.key)), fmtInt(d.value)]), "No data");
+    drawColumns($("dailyChart"), data, weekly);
+  }
+
+  // Four whole-number gridline steps of 1, 2 or 5 × 10ⁿ
+  function niceMax(v) {
+    const raw = Math.max(1, v / 4), p = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 5, 10].map((m) => m * p).find((s) => s >= raw);
+    return 4 * Math.ceil(step);
+  }
+
+  function drawColumns(el, data, weekly) {
+    const W = el.clientWidth || 600, H = 220, L = 40, R = 8, T = 10, B = 26;
+    const pw = W - L - R, ph = H - T - B;
+    const max = niceMax(Math.max(0, ...data.map((d) => d.value)));
+    const slot = pw / Math.max(1, data.length);
+    const bw = Math.max(2, Math.min(24, slot * 0.7));
+    const y = (v) => T + ph - (v / max) * ph;
+    const ticks = [0, max / 4, max / 2, (3 * max) / 4, max];
+    const labelEvery = Math.max(1, Math.ceil(data.length / Math.max(2, Math.floor(pw / 70))));
+
+    let svg = `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="Column chart of unique listeners per ${weekly ? "week" : "day"}">`;
+    for (const t of ticks) {
+      svg += `<line x1="${L}" x2="${W - R}" y1="${y(t)}" y2="${y(t)}" stroke="var(${t === 0 ? "--axis" : "--grid"})" stroke-width="1" shape-rendering="crispEdges"/>`;
+      svg += `<text x="${L - 6}" y="${y(t) + 4}" text-anchor="end" font-size="11" fill="var(--muted)" style="font-variant-numeric:tabular-nums">${fmtInt(Math.round(t * 10) / 10)}</text>`;
+    }
+    data.forEach((d, i) => {
+      const cx = L + slot * i + slot / 2;
+      if (d.value > 0) {
+        const top = y(d.value), x0 = cx - bw / 2, x1 = cx + bw / 2, base = y(0), r = Math.min(4, bw / 2, base - top);
+        // 4px rounded data end, square at the baseline
+        svg += `<path d="M${x0},${base} V${top + r} Q${x0},${top} ${x0 + r},${top} H${x1 - r} Q${x1},${top} ${x1},${top + r} V${base} Z" fill="var(--series-1)"/>`;
+      }
+      if (i % labelEvery === 0) {
+        svg += `<text x="${cx}" y="${H - 8}" text-anchor="middle" font-size="11" fill="var(--muted)">${esc(shortDay(d.key))}</text>`;
+      }
+      svg += `<rect class="hit" data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+    });
+    svg += "</svg>";
+    el.innerHTML = svg + '<div class="tooltip hidden"></div>';
+
+    const tip = el.querySelector(".tooltip");
+    el.querySelectorAll(".hit").forEach((rect) => {
+      rect.addEventListener("mouseenter", () => {
+        const d = data[Number(rect.dataset.i)];
+        tip.innerHTML = `<div>${weekly ? "Week of " : ""}${esc(shortDay(d.key))}</div><div class="t-val">${fmtInt(d.value)} unique listener${d.value === 1 ? "" : "s"}</div>`;
+        tip.classList.remove("hidden");
+        rect.setAttribute("fill", "var(--hover)");
+        const box = el.getBoundingClientRect(), rb = rect.getBoundingClientRect();
+        const left = Math.min(Math.max(0, rb.left - box.left + rb.width / 2 - tip.offsetWidth / 2), box.width - tip.offsetWidth);
+        tip.style.left = `${left}px`;
+        tip.style.top = `${Math.max(0, y(d.value) * (box.height / H) - tip.offsetHeight - 8)}px`;
+      });
+      rect.addEventListener("mouseleave", () => { tip.classList.add("hidden"); rect.setAttribute("fill", "transparent"); });
+    });
+  }
+
+  // ── CSV ─────────────────────────────────────────────
+  function downloadCsv() {
+    const now = Date.now();
+    const iso = (t) => (t ? new Date(t).toISOString() : "");
+    // Speaker codes are typed by users: keep a spreadsheet from reading one as a formula
+    const cell = (v) => {
+      let s = String(v ?? "");
+      if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const head = ["connectedAt", "lastSeenAt", "disconnectedAt", "minutes", "role", "speakerCode", "language", "languages",
+                  "device", "browser", "endReason", "clientUid"];
+    const lines = [head.join(",")].concat(filtered().map((r) => [
+      iso(r.connectedAt), iso(r.lastSeenAt), iso(r.disconnectedAt),
+      (Math.max(0, endOf(r, now) - r.connectedAt) / 60000).toFixed(1),
+      r.role, r.speakerCode, r.language, r.languages.join("|"), r.device, r.browser, r.endReason, r.clientUid,
+    ].map(cell).join(",")));
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `rosettacast-usage-${period.from}-to-${period.to}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  // ── Wiring ──────────────────────────────────────────
+  $("range").addEventListener("change", () => {
+    const custom = $("range").value === "custom";
+    $("fromWrap").classList.toggle("hidden", !custom);
+    $("toWrap").classList.toggle("hidden", !custom);
+    if (custom && !$("from").value) {
+      $("to").value = dayKey(Date.now());
+      $("from").value = dayKey(Date.now() - 29 * 86400e3);
+    }
+    loadHistory();
+  });
+  $("from").addEventListener("change", loadHistory);
+  $("to").addEventListener("change", loadHistory);
+  $("codeFilter").addEventListener("change", renderHistory);
+  $("refresh").addEventListener("click", loadHistory);
+  $("csv").addEventListener("click", downloadCsv);
+  let resizeTimer;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (period) renderDaily(filtered().filter((r) => r.role === "listener")); }, 150);
+  });
+
+  loadHistory();
+</script>
+</body>
+</html>

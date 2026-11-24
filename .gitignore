@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Secrets and credentials -- never commit these
+.env
+.env.*
+key.json
+*-key.json
+*.pem
+*.key
+
+# Test audio
+*.mp3
+
+# Local tool settings and caches
+.claude/settings.local.json
+.firebase/
+*.log

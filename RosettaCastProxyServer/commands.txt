@@ -1,0 +1,20 @@
+
+   gcloud run deploy rosettacast --source . --region us-central1 --allow-unauthenticated
+   
+   gcloud run services delete speech-proxy --region us-central1
+   
+   firebase deploy --only functions
+   
+   gcloud run services list --region us-central1
+   
+   firebase functions:log
+
+gcloud firestore fields ttls update expiresAt  --collection-group=speech_transcripts  --enable-ttl  --project=rosettacast
+
+gcloud firestore fields ttls update expiresAt  --collection-group=session_buffers --enable-ttl --project=rosettacast
+
+gcloud firestore fields ttls update expiresAt --collection-group=fragment_batches --enable-ttl --project=rosettacast
+
+gcloud firestore fields ttls update expiresAt --collection-group=speech_sentences --enable-ttl --project=rosettacast
+
+gcloud firestore fields ttls update expiresAt --collection-group=speech_translations --enable-ttl --project=rosettacast

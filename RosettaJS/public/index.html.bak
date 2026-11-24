@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<!-- firebase deploy --only hosting -->
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RosettaCast Live Translation</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #0f0f0f; color: #f0f0f0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 12px 18px; }
+    .controls { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%; max-width: 100%; margin-bottom: 10px; }
+    .speaker-row { display: flex; gap: 8px; width: 100%; align-items: center; justify-content: center; }
+    select#speakerSelect { width: 200px; padding: 10px 14px; background: #1e1e1e; border: 1px solid #333; border-radius: 8px; color: #f0f0f0; font-size: 1rem; outline: none; cursor: pointer; transition: border-color 0.2s; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; padding-right: 36px; }
+    select#speakerSelect:focus { border-color: #555; }
+    select#speakerSelect option { background: #1e1e1e; color: #f0f0f0; }
+    .lang-buttons { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    .lang-btn { padding: 10px 20px; background: #1e1e1e; border: 1px solid #333; border-radius: 24px; color: #aaa; font-size: 0.9rem; cursor: pointer; transition: all 0.2s; }
+    .lang-btn:hover { background: #2a2a2a; border-color: #555; color: #f0f0f0; }
+    .lang-btn.active { background: #1a3a1a; border-color: #4caf50; color: #4caf50; }
+    .font-btn { padding: 8px 16px; background: #2a2a2a; border: 1px solid #444; border-radius: 8px; color: #f0f0f0; font-size: 0.9rem; cursor: pointer; transition: background 0.2s; }
+    .font-btn:hover { background: #333; border-color: #666; }
+    .error-msg { color: #e57373; font-size: 0.85rem; margin-top: 4px; }
+
+    /* Two pane layout */
+    .panes { display: flex; flex-direction: column; gap: 8px; width: 100%; flex: 1; min-height: 0; }
+
+    /* Committed text pane — takes most of the space */
+    .committed-box {
+      width: 100%;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      padding: 16px 20px;
+      overflow-y: auto;
+      flex: 3;
+      min-height: 0;
+      scroll-behavior: smooth;
+      position: relative;
+    }
+
+    /* In-progress pane — smaller, at bottom */
+    .interim-box {
+      width: 100%;
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 12px 20px;
+      flex: 1;
+      min-height: 80px;
+      max-height: 160px;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .pane-label {
+      font-size: 0.7rem;
+      color: #444;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    .status-bar { font-size: 0.8rem; color: #555; margin-bottom: 12px; display: flex; justify-content: space-between; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #555; margin-right: 6px; vertical-align: middle; }
+    .status-dot.live { background: #4caf50; box-shadow: 0 0 6px #4caf50; }
+
+    #committed-text { font-size: 1.4rem; line-height: 1.8; color: #e0e0e0; white-space: pre-wrap; }
+    #interim-text { font-size: 1.2rem; line-height: 1.6; color: #666; white-space: pre-wrap; font-style: italic; }
+
+    .sentence-committed { font-weight: bold; color: #e0e0e0; }
+    .sentence-last { font-weight: bold; color: #90caf9; }
+
+    .placeholder-text { color: #333; font-style: italic; font-size: 1rem; }
+    .clear-btn { position: absolute; top: 10px; right: 12px; background: none; border: none; color: #333; cursor: pointer; font-size: 0.75rem; transition: color 0.2s; }
+    .clear-btn:hover { color: #888; }
+
+    #ttsBtn.tts-on { border-color: #4caf50; color: #4caf50; }
+    @keyframes pulse-border {
+      0%, 100% { box-shadow: 0 0 0 2px #4caf50, 0 0 8px 3px rgba(76,175,80,0.6); border-color: #4caf50; }
+      50% { box-shadow: 0 0 0 2px rgba(76,175,80,0.2), 0 0 4px 1px rgba(76,175,80,0.1); border-color: #555; }
+    }
+    select#speakerSelect.needs-selection { animation: pulse-border 1.2s ease-in-out infinite; }
+
+    /* Make body fill screen */
+    html, body { height: 100%; }
+    body { display: flex; flex-direction: column; }
+  </style>
+</head>
+<body>
+  <div class="controls">
+    <div class="speaker-row">
+      <select id="speakerSelect" class="needs-selection"><option value="">Choose a Speaker</option></select>
+      <button class="font-btn" onclick="changeFontSize(-2)">A-</button>
+      <button class="font-btn" onclick="changeFontSize(2)">A+</button>
+      <button class="font-btn" id="ttsBtn" onclick="toggleTTS()" title="Read aloud">🔇 Audio Off</button>
+    </div>
+    <div id="errorMsg" class="error-msg" style="display:none;"></div>
+    <div class="lang-buttons">
+      <button class="lang-btn active" data-lang="en" onclick="selectLanguage(this)">English</button>
+      <button class="lang-btn" data-lang="ko" onclick="selectLanguage(this)">Korean</button>
+      <button class="lang-btn" data-lang="es" onclick="selectLanguage(this)">Spanish</button>
+      <button class="lang-btn" data-lang="fr" onclick="selectLanguage(this)">French</button>
+      <button class="lang-btn" data-lang="de" onclick="selectLanguage(this)">German</button>
+    </div>
+  </div>
+
+  <div class="panes">
+    <!-- Top pane: finalized sentences -->
+    <div class="committed-box" id="committedBox">
+      <div class="status-bar">
+        <span><span class="status-dot" id="statusDot"></span><span id="statusText">Loading...</span></span>
+        <span id="langLabel">English</span>
+      </div>
+      <button class="clear-btn" onclick="clearTranscript()">Clear</button>
+      <div id="committed-text">
+        <span class="placeholder-text">Choose a speaker above to begin.</span>
+      </div>
+    </div>
+
+    <!-- Bottom pane: in-progress text -->
+    <div class="interim-box" id="interimBox">
+      <button class="clear-btn" onclick="clearInterim()">Clear</button>
+      <div id="interim-text">
+        <span class="placeholder-text">In-progress text will appear here...</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── Text-to-Speech ───────────────────────────────────
+    let ttsEnabled = false;
+    let ttsSpeaking = false;
+
+    window.toggleTTS = function() {
+      ttsEnabled = !ttsEnabled;
+      const btn = document.getElementById("ttsBtn");
+      if (ttsEnabled) {
+        btn.textContent = "🔊 Audio On";
+        btn.classList.add("tts-on");
+      } else {
+        btn.textContent = "🔇 Audio Off";
+        btn.classList.remove("tts-on");
+        window.speechSynthesis.cancel();
+        ttsSpeaking = false;
+      }
+    };
+
+    function speakText(text, lang) {
+      if (!ttsEnabled || !text || !text.trim()) return;
+      // Cancel any current speech before speaking new sentence
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text.trim());
+      // Map language codes to BCP-47 for speech synthesis
+      const langMap = { en: "en-US", ko: "ko-KR", es: "es-ES", fr: "fr-FR", de: "de-DE" };
+      utterance.lang = langMap[lang] ?? lang ?? "en-US";
+      utterance.rate = 0.95;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      utterance.onstart = () => { ttsSpeaking = true; };
+      utterance.onend = () => { ttsSpeaking = false; };
+      utterance.onerror = () => { ttsSpeaking = false; };
+      window.speechSynthesis.speak(utterance);
+    }
+
+    window._speakText = speakText;
+    // ─────────────────────────────────────────────────────
+  </script>
+
+  <script type="module">
+    console.log("Script starting...");
+
+    let app, db;
+    try {
+      const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+      const { getFirestore, collection, query, where, orderBy, onSnapshot, setDoc, doc, getDocs } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+      console.log("Firebase SDK loaded OK");
+
+      const firebaseConfig = {
+        apiKey: "YOUR_FIREBASE_API_KEY",
+        authDomain: "rosettacast.firebaseapp.com",
+        projectId: "rosettacast",
+        storageBucket: "rosettacast.firebasestorage.app",
+        messagingSenderId: "114230502988",
+        appId: "1:114230502988:web:46dcba200acfe59c7bf6e9",
+        measurementId: "G-VJH32MWZLF"
+      };
+
+      app = initializeApp(firebaseConfig);
+      db = getFirestore(app);
+      console.log("Firebase initialized OK");
+
+      let unsubscribe = null;
+      let currentFontSize = 1.4;
+      let selectedLanguage = "en";
+      let isConnected = false;
+      let listenStartMs = 0;
+      const langNames = { en: "English", ko: "Korean", es: "Spanish", fr: "French", de: "German" };
+
+      // Committed docs: docId -> { text }
+      const committedDocs = new Map();
+      // In-progress doc: the latest doc not yet finalized
+      let interimDocId = null;
+      let interimText = "";
+
+      window.changeFontSize = function(delta) {
+        currentFontSize = Math.min(4, Math.max(0.6, currentFontSize + delta * 0.1));
+        document.getElementById("committed-text").style.fontSize = currentFontSize + "rem";
+        document.getElementById("interim-text").style.fontSize = (currentFontSize * 0.85) + "rem";
+      };
+
+      function renderCommitted() {
+        const el = document.getElementById("committed-text");
+        const box = document.getElementById("committedBox");
+        el.innerHTML = "";
+        const entries = [...committedDocs.entries()];
+        entries.forEach(([, entry], i) => {
+          const span = document.createElement("span");
+          span.textContent = entry.text + " ";
+          span.className = i === entries.length - 1 ? "sentence-last" : "sentence-committed";
+          el.appendChild(span);
+        });
+        box.scrollTop = box.scrollHeight;
+      }
+
+      function renderInterim() {
+        const el = document.getElementById("interim-text");
+        el.textContent = interimText;
+      }
+
+      window.clearTranscript = function() {
+        committedDocs.clear();
+        interimDocId = null;
+        interimText = "";
+        document.getElementById("committed-text").innerHTML = "";
+        document.getElementById("interim-text").textContent = "";
+      };
+
+      window.clearInterim = function() {
+        interimText = "";
+        renderInterim();
+      };
+
+      async function loadSpeakerCodes() {
+        const select = document.getElementById("speakerSelect");
+        console.log("Loading speaker codes...");
+        try {
+          const snap = await getDocs(collection(db, "speech_transcripts"));
+          console.log("speech_transcripts docs:", snap.size);
+          const speakers = new Set();
+          snap.forEach((d) => { const s = d.data().speaker; if (s) speakers.add(s); });
+          console.log("Speakers found:", [...speakers]);
+          select.innerHTML = '<option value="">Choose a Speaker</option>';
+          [...speakers].sort().forEach((speaker) => {
+            const opt = document.createElement("option");
+            opt.value = speaker;
+            opt.textContent = speaker;
+            select.appendChild(opt);
+          });
+          setStatus(false, "Choose a speaker");
+        } catch (err) {
+          console.error("Failed to load speaker codes:", err);
+          setStatus(false, "Error: " + err.message);
+        }
+      }
+
+      loadSpeakerCodes();
+
+      document.getElementById("speakerSelect").addEventListener("change", function() {
+        const speaker = this.value.trim();
+        if (speaker) this.classList.remove("needs-selection");
+        else this.classList.add("needs-selection");
+        if (isConnected) disconnect();
+        if (speaker) connect();
+      });
+
+      window.selectLanguage = function(btn) {
+        document.querySelectorAll(".lang-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        selectedLanguage = btn.dataset.lang;
+        document.getElementById("langLabel").textContent = langNames[selectedLanguage] ?? selectedLanguage;
+        if (isConnected) { writeLanguageRequest(); switchLanguage(); }
+      };
+
+      function setStatus(live, text) {
+        document.getElementById("statusDot").className = "status-dot" + (live ? " live" : "");
+        document.getElementById("statusText").textContent = text;
+      }
+
+      function showError(msg) {
+        const el = document.getElementById("errorMsg");
+        el.textContent = msg;
+        el.style.display = msg ? "block" : "none";
+      }
+
+      function getSpeaker() { return document.getElementById("speakerSelect").value.trim(); }
+
+      function connect() {
+        const speaker = getSpeaker();
+        if (!speaker) return;
+        showError("");
+        isConnected = true;
+        listenStartMs = Date.now() - (30 * 60 * 1000); // 30 min lookback for clock skew
+        committedDocs.clear();
+        interimDocId = null;
+        interimText = "";
+        document.getElementById("committed-text").innerHTML = "";
+        document.getElementById("interim-text").textContent = "";
+        writeLanguageRequest();
+        switchLanguage();
+      }
+
+      function disconnect() {
+        isConnected = false;
+        if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+        committedDocs.clear();
+        interimDocId = null;
+        interimText = "";
+        setStatus(false, "Disconnected");
+      }
+
+      function switchLanguage() {
+        if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+
+        const speaker = getSpeaker();
+        console.log("Starting listener | speaker:", speaker, "| lang:", selectedLanguage);
+
+        const q = query(
+          collection(db, "speech_translations"),
+          where("speaker", "==", speaker),
+          where("timestamp", ">", listenStartMs),
+          orderBy("timestamp")
+        );
+
+        setStatus(true, "Listening...");
+        let firstSnapshot = true;
+
+        unsubscribe = onSnapshot(q, (snapshot) => {
+          console.log("Snapshot | docs:", snapshot.size, "| first:", firstSnapshot);
+
+          if (firstSnapshot) {
+            firstSnapshot = false;
+            committedDocs.clear();
+            interimDocId = null;
+            interimText = "";
+
+            // All existing docs go into committed instantly
+            snapshot.docs.forEach((docSnap) => {
+              const data = docSnap.data();
+              const translations = data.translations ?? {};
+              const text = translations[selectedLanguage] ?? translations[data.sourceLang] ?? "";
+              if (!text) return;
+              committedDocs.set(docSnap.id, { text });
+            });
+
+            renderCommitted();
+            renderInterim();
+            return;
+          }
+
+          // Subsequent changes
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === "added" || change.type === "modified") {
+              const data = change.doc.data();
+              const docId = change.doc.id;
+              const translations = data.translations ?? {};
+              const text = translations[selectedLanguage] ?? translations[data.sourceLang] ?? "";
+              if (!text) return;
+
+              if (change.type === "added") {
+                // New doc — goes to interim (in-progress bottom pane)
+                // Move previous interim to committed
+                if (interimDocId && interimText) {
+                  committedDocs.set(interimDocId, { text: interimText });
+                  // Speak the sentence that just got committed (was last blue)
+                  if (window._speakText) window._speakText(interimText, selectedLanguage);
+                }
+                interimDocId = docId;
+                interimText = text;
+                renderCommitted();
+                renderInterim();
+              } else if (change.type === "modified") {
+                if (docId === interimDocId) {
+                  // Update in-progress pane
+                  interimText = text;
+                  renderInterim();
+                } else {
+                  // Already committed — update in place
+                  committedDocs.set(docId, { text });
+                  renderCommitted();
+                }
+              }
+            }
+          });
+        }, (err) => {
+          console.error("Firestore error:", err);
+          setStatus(false, "Error: " + err.message);
+          showError("Firestore error: " + err.message);
+        });
+      }
+
+      async function writeLanguageRequest() {
+        const speaker = getSpeaker();
+        if (!speaker) return;
+        const now = Date.now();
+        const docId = `${speaker}_${selectedLanguage}`;
+        try {
+          await setDoc(doc(db, "language_requests", docId), {
+            speaker, language: selectedLanguage,
+            timestamp: now,
+            expiresAt: new Date(now + 24 * 60 * 60 * 1000),
+          });
+        } catch (err) { console.error("Failed to write language request:", err); }
+      }
+
+    } catch (err) {
+      console.error("Fatal initialization error:", err);
+      document.getElementById("statusText").textContent = "Failed to load: " + err.message;
+      document.getElementById("committed-text").innerHTML = `<span style="color:#e57373">Error: ${err.message}</span>`;
+    }
+  </script>
+</body>
+</html>

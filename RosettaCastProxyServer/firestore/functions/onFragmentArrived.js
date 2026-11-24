@@ -1,0 +1,60 @@
+// firestore/functions/onFragmentArrived.js
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { CloudTasksClient } from "@google-cloud/tasks";
+
+const tasksClient = new CloudTasksClient();
+const PROJECT_ID = process.env.GCLOUD_PROJECT;
+const LOCATION   = "us-central1";           // match your Cloud Run region
+const QUEUE_NAME = "buffer-flush-queue";    // create this queue once (see step 3)
+const FLUSH_URL  = process.env.FLUSH_HANDLER_URL; // Cloud Run URL for step 2
+
+const STALE_THRESHOLD_SECONDS = 3;
+
+// NOTE: this must be onDocumentWritten, not onDocumentUpdated. The first
+// fragment of a session CREATES session_buffers/{sessionId}, and an "updated"
+// trigger never sees a create — so a session with a single fragment would sit
+// in the buffer forever and never flush.
+export const onFragmentArrived = onDocumentWritten(
+  "session_buffers/{sessionId}",
+  async (event) => {
+    const after = event.data?.after?.exists ? event.data.after.data() : null;
+
+    // Nothing to flush — buffer empty, or the doc was deleted
+    if (!after || !after.count) return;
+
+    const sessionId = event.params.sessionId;
+    const lastFragment = [...after.fragments]
+      .sort((a, b) => b.timestamp - a.timestamp)[0];
+    const lastTimestamp = lastFragment?.timestamp ?? Date.now();
+
+    // Schedule a flush task N seconds after the last fragment
+    const scheduleTimeSeconds =
+      Math.floor(lastTimestamp / 1000) + STALE_THRESHOLD_SECONDS;
+
+    const queuePath = tasksClient.queuePath(PROJECT_ID, LOCATION, QUEUE_NAME);
+
+    const task = {
+      httpRequest: {
+        httpMethod: "POST",
+        url: FLUSH_URL,
+        headers: { "Content-Type": "application/json" },
+        body: Buffer.from(
+          JSON.stringify({ sessionId, lastTimestamp })
+        ).toString("base64"),
+        // Authenticate to Cloud Run using OIDC
+        oidcToken: {
+          serviceAccountEmail: `${PROJECT_ID}@appspot.gserviceaccount.com`,
+        },
+      },
+      scheduleTime: {
+        seconds: scheduleTimeSeconds,
+      },
+    };
+
+    await tasksClient.createTask({ parent: queuePath, task });
+    console.log(
+      `⏱ Flush task scheduled for session=${sessionId} ` +
+      `in ~${STALE_THRESHOLD_SECONDS}s`
+    );
+  }
+);

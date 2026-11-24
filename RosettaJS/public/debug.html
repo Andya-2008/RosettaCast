@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RosettaCast Debug</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Courier New', monospace;
+      background: #0a0a0a;
+      color: #00ff88;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+    h1 { font-size: 1.4rem; color: #00ff88; margin-bottom: 8px; letter-spacing: 0.1em; }
+    .subtitle { font-size: 0.75rem; color: #555; margin-bottom: 32px; }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      width: 100%;
+      max-width: 900px;
+      margin-bottom: 20px;
+      align-items: center;
+    }
+
+      padding: 10px 14px;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #00ff88;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9rem;
+      outline: none;
+      width: 180px;
+    }
+    input[type="text"]:focus { border-color: #00ff88; }
+    input[type="text"]::placeholder { color: #444; }
+    select {
+      padding: 10px 14px;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #00ff88;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9rem;
+      outline: none;
+      cursor: pointer;
+    }
+    select:focus { border-color: #00ff88; }
+    button {
+      padding: 10px 20px;
+      background: #001a0d;
+      border: 1px solid #00ff88;
+      border-radius: 6px;
+      color: #00ff88;
+      font-family: 'Courier New', monospace;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #003320; }
+    button.danger {
+      border-color: #ff4444;
+      color: #ff4444;
+      background: #1a0000;
+    }
+    button.danger:hover { background: #330000; }
+    .stats {
+      width: 100%;
+      max-width: 900px;
+      font-size: 0.75rem;
+      color: #555;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .doc-list {
+      width: 100%;
+      max-width: 900px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .doc-card {
+      background: #111;
+      border: 1px solid #1a1a1a;
+      border-radius: 6px;
+      padding: 14px 16px;
+      font-size: 0.8rem;
+      line-height: 1.6;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .doc-card:hover { border-color: #333; }
+    .doc-card.expanded { border-color: #00ff88; }
+    .doc-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .doc-id { color: #888; font-size: 0.7rem; word-break: break-all; }
+    .doc-timestamp { color: #555; font-size: 0.7rem; white-space: nowrap; }
+    .doc-summary { color: #00cc66; margin-top: 6px; }
+    .doc-detail {
+      display: none;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #222;
+      color: #aaa;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-size: 0.75rem;
+    }
+    .doc-card.expanded .doc-detail { display: block; }
+    .empty { color: #444; font-size: 0.85rem; text-align: center; padding: 40px; }
+    .loading { color: #555; font-size: 0.85rem; text-align: center; padding: 40px; }
+    .error { color: #ff4444; font-size: 0.85rem; padding: 12px 16px; background: #1a0000; border-radius: 6px; border: 1px solid #ff4444; }
+    .live-badge {
+      font-size: 0.65rem;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: #001a0d;
+      border: 1px solid #00ff88;
+      color: #00ff88;
+      margin-left: 8px;
+    }
+  </style>
+</head>
+<body>
+  <h1>RosettaCast Debug</h1>
+  <p class="subtitle">Live Firestore inspector</p>
+
+  <div class="controls">
+    <select id="speakerSelect"><option value="">Choose a Speaker Code</option></select>
+    <select id="tableSelect">
+      <option value="speech_transcripts">speech_transcripts</option>
+      <option value="fragment_batches">fragment_batches</option>
+      <option value="session_buffers">session_buffers</option>
+      <option value="speech_sentences">speech_sentences</option>
+      <option value="speech_translations">speech_translations</option>
+      <option value="language_requests">language_requests</option>
+    </select>
+    <button onclick="loadDocs()">Query</button>
+    <button onclick="toggleLive()">Live Off</button>
+    <button class="danger" onclick="clearResults()">Clear</button>
+  </div>
+
+  <div class="stats" id="stats" style="display:none;">
+    <span id="statsText"></span>
+    <span id="liveStatus"></span>
+  </div>
+
+  <div class="doc-list" id="docList">
+    <div class="empty">Choose a speaker code and click Query.</div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, collection, query, where, orderBy, onSnapshot, getDocs, limit } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "YOUR_FIREBASE_API_KEY",
+      authDomain: "rosettacast.firebaseapp.com",
+      projectId: "rosettacast",
+      storageBucket: "rosettacast.firebasestorage.app",
+      messagingSenderId: "114230502988",
+      appId: "1:114230502988:web:46dcba200acfe59c7bf6e9",
+      measurementId: "G-VJH32MWZLF"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    let unsubscribe = null;
+    let isLive = false;
+    let docMap = new Map(); // docId -> data
+
+    // Tables that use "speaker" field vs "sessionId" for filtering
+    const SPEAKER_FIELD = {
+      speech_transcripts: "speaker",
+      fragment_batches: "speaker",
+      session_buffers: null,        // keyed by sessionId as doc ID
+      speech_sentences: "speaker",
+      speech_translations: "speaker",
+      language_requests: "speaker",
+    };
+
+    // Timestamp field per collection
+    const TIMESTAMP_FIELD = {
+      speech_transcripts: "timestamp",
+      fragment_batches: "createdAt",
+      session_buffers: "lastFlushedAt",
+      speech_sentences: "timestamp",
+      speech_translations: "timestamp",
+      language_requests: "timestamp",
+    };
+
+    window.loadDocs = function() {
+      stopLive();
+      isLive = false;
+      document.getElementById("toggleLiveBtn") && (document.querySelector("button:nth-child(4)").textContent = "Live Off");
+      fetchDocs(false);
+    };
+
+    window.toggleLive = function() {
+      const btn = document.querySelectorAll("button")[1];
+      if (isLive) {
+        stopLive();
+        isLive = false;
+        btn.textContent = "Live Off";
+        document.getElementById("liveStatus").textContent = "";
+      } else {
+        isLive = true;
+        btn.textContent = "Live On";
+        fetchDocs(true);
+      }
+    };
+
+    window.clearResults = function() {
+      stopLive();
+      isLive = false;
+      document.querySelectorAll("button")[1].textContent = "Live Off";
+      docMap.clear();
+      document.getElementById("docList").innerHTML = '<div class="empty">Choose a speaker code and click Query.</div>';
+      document.getElementById("stats").style.display = "none";
+    };
+
+    function stopLive() {
+      if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+    }
+
+    async function loadSpeakerCodes() {
+      const select = document.getElementById("speakerSelect");
+      try {
+        const snap = await getDocs(collection(db, "speech_transcripts"));
+        const speakers = new Set();
+        snap.forEach((d) => {
+          const speaker = d.data().speaker;
+          if (speaker) speakers.add(speaker);
+        });
+        select.innerHTML = '<option value="">Choose a Speaker Code</option>';
+        [...speakers].sort().forEach((speaker) => {
+          const opt = document.createElement("option");
+          opt.value = speaker;
+          opt.textContent = speaker;
+          select.appendChild(opt);
+        });
+      } catch (err) {
+        console.error("Failed to load speaker codes:", err);
+      }
+    }
+
+    loadSpeakerCodes();
+
+    function getSpeaker() {
+      return document.getElementById("speakerSelect").value.trim();
+    }
+
+    function getTable() {
+      return document.getElementById("tableSelect").value;
+    }
+
+    function buildQuery(table, speaker) {
+      const col = collection(db, table);
+      const speakerField = SPEAKER_FIELD[table];
+      const tsField = TIMESTAMP_FIELD[table] ?? "timestamp";
+
+      if (speakerField && speaker) {
+        return query(col, where(speakerField, "==", speaker), orderBy(tsField, "desc"), limit(100));
+      } else {
+        return query(col, orderBy(tsField, "desc"), limit(100));
+      }
+    }
+
+    function fetchDocs(live) {
+      const speaker = getSpeaker();
+      const table = getTable();
+      const docList = document.getElementById("docList");
+      const stats = document.getElementById("stats");
+
+      docList.innerHTML = '<div class="loading">Loading...</div>';
+      stats.style.display = "none";
+      docMap.clear();
+
+      const q = buildQuery(table, speaker);
+
+      if (live) {
+        unsubscribe = onSnapshot(q, (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === "added" || change.type === "modified") {
+              docMap.set(change.doc.id, { id: change.doc.id, data: change.doc.data() });
+            } else if (change.type === "removed") {
+              docMap.delete(change.doc.id);
+            }
+          });
+          renderDocs(table);
+          document.getElementById("liveStatus").innerHTML = '<span class="live-badge">LIVE</span>';
+        }, (err) => {
+          docList.innerHTML = `<div class="error">Error: ${err.message}</div>`;
+        });
+      } else {
+        getDocs(q).then((snapshot) => {
+          snapshot.forEach((doc) => {
+            docMap.set(doc.id, { id: doc.id, data: doc.data() });
+          });
+          renderDocs(table);
+        }).catch((err) => {
+          docList.innerHTML = `<div class="error">Error: ${err.message}</div>`;
+        });
+      }
+    }
+
+    function formatTimestamp(val) {
+      if (!val) return "—";
+      if (typeof val === "number") return new Date(val).toLocaleString();
+      if (val.toDate) return val.toDate().toLocaleString();
+      return String(val);
+    }
+
+    function getSummary(table, data) {
+      switch (table) {
+        case "speech_transcripts":
+          return data.text ?? "";
+        case "fragment_batches":
+          return `status: ${data.status ?? "?"} | fragments: ${data.fragments?.length ?? 0} | lang: ${data.sourceLang ?? "?"}`;
+        case "session_buffers":
+          return `count: ${data.count ?? 0} | speaker: ${data.speaker ?? "?"} | lang: ${data.sourceLang ?? "?"}`;
+        case "speech_sentences":
+          return data.text ?? "";
+        case "speech_translations": {
+          const t = data.translations ?? {};
+          return Object.entries(t).map(([k, v]) => `[${k}] ${v}`).join(" | ");
+        }
+        case "language_requests":
+          return `lang: ${data.language ?? "?"} | speaker: ${data.speaker ?? "?"}`;
+        default:
+          return "";
+      }
+    }
+
+    function renderDocs(table) {
+      const docList = document.getElementById("docList");
+      const stats = document.getElementById("stats");
+      const tsField = TIMESTAMP_FIELD[table] ?? "timestamp";
+
+      const docs = [...docMap.values()].sort((a, b) => {
+        const ta = a.data[tsField];
+        const tb = b.data[tsField];
+        const getMs = (v) => {
+          if (!v) return 0;
+          if (typeof v === "number") return v;
+          if (v.toMillis) return v.toMillis();
+          return 0;
+        };
+        return getMs(tb) - getMs(ta); // newest first
+      });
+
+      stats.style.display = "flex";
+      document.getElementById("statsText").textContent = `${docs.length} document(s) in ${table}`;
+
+      if (docs.length === 0) {
+        docList.innerHTML = '<div class="empty">No documents found.</div>';
+        return;
+      }
+
+      docList.innerHTML = docs.map(({ id, data }) => {
+        const ts = formatTimestamp(data[tsField]);
+        const summary = getSummary(table, data);
+        const detail = JSON.stringify(data, (key, val) => {
+          if (val && typeof val === "object" && val.toDate) return val.toDate().toLocaleString();
+          return val;
+        }, 2);
+        return `
+          <div class="doc-card" onclick="this.classList.toggle('expanded')">
+            <div class="doc-header">
+              <span class="doc-id">${id}</span>
+              <span class="doc-timestamp">${ts}</span>
+            </div>
+            <div class="doc-summary">${summary}</div>
+            <div class="doc-detail">${detail}</div>
+          </div>`;
+      }).join("");
+    }
+
+    window.renderDocs = renderDocs;
+  </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+// firestore/functions/index.js
+import { initializeApp } from "firebase-admin/app";
+
+initializeApp();
+
+export { onFragmentCreated }    from "./onFragmentCreated.js";
+export { onBatchCreated }       from "./onBatchCreated.js";
+export { onSentenceCreated }    from "./onSentenceCreated.js";
+export { onSentenceUpdated }    from "./onSentenceUpdated.js";

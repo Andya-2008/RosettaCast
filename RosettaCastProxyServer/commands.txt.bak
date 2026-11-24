@@ -1,0 +1,12 @@
+
+
+
+gcloud firestore fields ttls update expiresAt  --collection-group=speech_transcripts  --enable-ttl  --project=rosettacast
+
+gcloud firestore fields ttls update expiresAt  --collection-group=session_buffers --enable-ttl --project=rosettacast
+
+gcloud firestore fields ttls update expiresAt --collection-group=fragment_batches --enable-ttl --project=rosettacast
+
+gcloud firestore fields ttls update expiresAt --collection-group=speech_sentences --enable-ttl --project=rosettacast
+
+gcloud firestore fields ttls update expiresAt --collection-group=speech_translations --enable-ttl --project=rosettacast
